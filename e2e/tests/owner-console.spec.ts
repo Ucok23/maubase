@@ -79,15 +79,21 @@ test('an owner tours Members, Maintenance, a live-created table, and SQL Studio'
     await shot(page, 'row-created');
   });
 
-  await test.step('editing the row', async () => {
+  await test.step('editing the row inline, without leaving the list', async () => {
+    // "Edit" is progressively enhanced (ADMINUI-32): htmx intercepts the
+    // click and swaps the row for an editable one in place, no
+    // navigation — the plain href it also carries (a no-JS fallback to
+    // the standalone edit page) never fires while htmx is active.
     await page.click('a:has-text("Edit")');
-    await page.waitForURL(`**/admin/ui/data/${tableName}/*/edit`);
-    await page.fill('input[name="label"]', 'Updated widget');
-    await Promise.all([
-      page.waitForURL(`**/admin/ui/data/${tableName}`),
-      page.click('button:has-text("Save changes")'),
-    ]);
+    // Identified by position, not text: once editable, the row's "First
+    // widget" text is an input *value*, not text content, so hasText
+    // can no longer find it — this is the only row on the page at this
+    // point in the flow.
+    const row = page.locator('table.data-table tbody tr').first();
+    await row.locator('input[name="label"]').fill('Updated widget');
+    await row.locator('button:has-text("Save")').click();
     await expect(page.getByText('Updated widget')).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/admin/ui/data/${tableName}$`)); // no navigation happened
     await shot(page, 'row-edited');
   });
 

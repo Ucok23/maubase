@@ -214,6 +214,21 @@ table.data-table { width: 100%; border-collapse: collapse; font-size: 13.5px; wh
 .data-table tbody tr:hover td { background: var(--surface-hover); }
 .data-table td.actions { font-family: var(--font); display: flex; gap: 8px; align-items: center; }
 .data-table .id-cell { color: var(--text-faint); }
+.null-cell { color: var(--text-faint); font-style: italic; font-size: 11px; letter-spacing: .02em; }
+.sort-link { display: inline-flex; align-items: center; gap: 2px; color: inherit; }
+.sort-link:hover { color: var(--text); text-decoration: none; }
+.sort-arrow { font-size: 9px; }
+.data-table td input {
+  width: 100%;
+  padding: 4px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font-size: 12.5px;
+  font-family: var(--font-mono);
+  background: var(--surface);
+  color: var(--text);
+}
+.data-table td input:focus { outline: none; border-color: var(--accent); }
 
 .empty-state {
   text-align: center;
