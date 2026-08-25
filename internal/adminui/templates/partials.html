@@ -27,13 +27,15 @@
 <a href="/admin/ui/data" class="nav-item {{if eq .Nav "data"}}active{{end}}">{{template "navicon" "data"}}Data</a>
 <a href="/admin/ui/users" class="nav-item {{if eq .Nav "users"}}active{{end}}">{{template "navicon" "users"}}Users</a>
 </div>
+{{if atLeast .Owner.Role "admin"}}
 <div class="nav-group">
 <div class="nav-group-label">Owner plane</div>
 <a href="/admin/ui/owners" class="nav-item {{if eq .Nav "owners"}}active{{end}}">{{template "navicon" "owners"}}Members</a>
 <a href="/admin/ui/audit-log" class="nav-item {{if eq .Nav "audit-log"}}active{{end}}">{{template "navicon" "audit-log"}}Audit log</a>
 <a href="/admin/ui/maintenance" class="nav-item {{if eq .Nav "maintenance"}}active{{end}}">{{template "navicon" "maintenance"}}Maintenance</a>
-<a href="/admin/ui/sql" class="nav-item {{if eq .Nav "sql"}}active{{end}}">{{template "navicon" "sql"}}SQL Studio</a>
+{{if atLeast .Owner.Role "owner"}}<a href="/admin/ui/sql" class="nav-item {{if eq .Nav "sql"}}active{{end}}">{{template "navicon" "sql"}}SQL Studio</a>{{end}}
 </div>
+{{end}}
 </nav>
 {{if .Owner}}
 <div class="sidebar-footer">

@@ -3,7 +3,9 @@
 // create/delete-owner controls stay owner-only regardless — admin is
 // below owner, not at it (see owners.html's role check, and OWNR-06/08)
 // — and SQL Studio stays out of reach entirely, since it's gated a tier
-// above the rest of this group (ADMINUI-16).
+// above the rest of this group (ADMINUI-16) — the sidebar reflects
+// exactly that split: Members/Audit log/Maintenance are offered, SQL
+// Studio isn't (ADMINUI-31).
 import { test, expect } from '@playwright/test';
 import { OWNER_EMAIL, OWNER_PASSWORD, createOwnerAccount, makeShotter, signIn, signOut } from './support';
 
@@ -24,6 +26,14 @@ test('an admin can read Members/Audit log/Maintenance, but not mutate owners or 
     await signIn(page, adminEmail, adminPassword);
     await expect(page.locator('.badge-admin').first()).toBeVisible();
     await shot(page, 'dashboard');
+  });
+
+  await test.step('the sidebar offers Members/Audit log/Maintenance but not SQL Studio', async () => {
+    for (const href of ['/admin/ui/owners', '/admin/ui/audit-log', '/admin/ui/maintenance']) {
+      await expect(page.locator(`a.nav-item[href="${href}"]`)).toBeVisible();
+    }
+    await expect(page.locator('a.nav-item[href="/admin/ui/sql"]')).toHaveCount(0);
+    await shot(page, 'sidebar-admin-tier');
   });
 
   await test.step('Members lists accounts but offers no create/delete controls', async () => {

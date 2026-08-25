@@ -2,9 +2,10 @@
 // (before this spec existed) a seat the browser suite never actually sat
 // in: every other spec here signs in as owner. Confirms, by rendering
 // them in a real browser rather than just asserting a status code, that
-// write controls are absent for a viewer (spec/admin-ui.md ADMINUI-14)
-// and that a page above their role renders the Forbidden page, not a
-// silent redirect (ADMINUI-05) — the same guarantee
+// write controls are absent for a viewer (spec/admin-ui.md ADMINUI-14),
+// that the sidebar doesn't even offer a page above their role
+// (ADMINUI-31), and that a page above their role renders the Forbidden
+// page, not a silent redirect (ADMINUI-05) — the same guarantee
 // test/adminui_test.go's TestAdminUI_RoleBelowPageMinimumGets403 checks
 // over raw HTTP, here checked as what actually paints on screen.
 import { test, expect } from '@playwright/test';
@@ -27,6 +28,13 @@ test('a viewer can read the admin UI but sees no write controls, and is blocked 
     await signIn(page, viewerEmail, viewerPassword);
     await expect(page.locator('.badge-viewer').first()).toBeVisible();
     await shot(page, 'dashboard');
+  });
+
+  await test.step('the sidebar offers no owner-plane pages at all', async () => {
+    for (const href of ['/admin/ui/owners', '/admin/ui/audit-log', '/admin/ui/maintenance', '/admin/ui/sql']) {
+      await expect(page.locator(`a.nav-item[href="${href}"]`)).toHaveCount(0);
+    }
+    await shot(page, 'sidebar-no-owner-plane');
   });
 
   await test.step('the data browser has no "New table" control', async () => {

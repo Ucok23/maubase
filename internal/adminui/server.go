@@ -40,6 +40,15 @@ var staticFS embed.FS
 var tmpl = template.Must(template.New("").Funcs(template.FuncMap{
 	"add": func(a, b int) int { return a + b },
 	"sub": func(a, b int) int { return a - b },
+	// atLeast backs the sidebar/dashboard's own role check — a plain
+	// {{if eq .Owner.Role "admin"}} can't express ownerauth.Role's tiered
+	// AtLeast (admin+ also means owner), and html/template can't call
+	// Role.AtLeast directly from a template action since a quoted string
+	// literal there is type string, not the named ownerauth.Role
+	// AtLeast expects. See spec/admin-ui.md ADMINUI-31.
+	"atLeast": func(role ownerauth.Role, min string) bool {
+		return role.AtLeast(ownerauth.Role(min))
+	},
 	// dict builds a map from alternating key/value arguments, for
 	// passing more than one value into a {{template}} call (which only
 	// takes a single pipeline) — used to hand column_row both the row

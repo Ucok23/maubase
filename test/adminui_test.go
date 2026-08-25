@@ -815,3 +815,65 @@ func TestAdminUI_UserActionsAreAudited(t *testing.T) {
 		}
 	}
 }
+
+// --- sidebar link visibility ------------------------------------------------
+
+func TestAdminUI_SidebarHidesLinksAboveRole(t *testing.T) {
+	// ADMINUI-31
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	createOwner(t, owner, baseURL, "adminui-nav-viewer@example.com", "viewerpassword1", "viewer")
+	createOwner(t, owner, baseURL, "adminui-nav-dev@example.com", "devpassword1", "developer")
+	createOwner(t, owner, baseURL, "adminui-nav-admin@example.com", "adminpassword1", "admin")
+
+	adminPlaneLinks := []string{`href="/admin/ui/owners"`, `href="/admin/ui/audit-log"`, `href="/admin/ui/maintenance"`}
+	sqlLink := `href="/admin/ui/sql"`
+
+	cases := []struct {
+		role, email, password  string
+		wantLinks, wantNoLinks []string
+	}{
+		{"viewer", "adminui-nav-viewer@example.com", "viewerpassword1",
+			[]string{`href="/admin/ui/data"`, `href="/admin/ui/users"`},
+			append(append([]string{}, adminPlaneLinks...), sqlLink)},
+		{"developer", "adminui-nav-dev@example.com", "devpassword1",
+			[]string{`href="/admin/ui/data"`, `href="/admin/ui/users"`},
+			append(append([]string{}, adminPlaneLinks...), sqlLink)},
+		{"admin", "adminui-nav-admin@example.com", "adminpassword1",
+			adminPlaneLinks,
+			[]string{sqlLink}},
+		{"owner", bootstrapEmail, bootstrapPassword,
+			append(append([]string{}, adminPlaneLinks...), sqlLink),
+			nil},
+	}
+
+	for _, c := range cases {
+		client := newClient(t)
+		adminUILogin(t, client, baseURL, c.email, c.password)
+		resp := doGetNoRedirect(t, client, baseURL+"/admin/ui")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s dashboard: want 200, got %d", c.role, resp.StatusCode)
+		}
+		body := bodyString(t, resp)
+		for _, want := range c.wantLinks {
+			if !strings.Contains(body, want) {
+				t.Fatalf("%s: want sidebar to link %s, got: %s", c.role, want, body)
+			}
+		}
+		for _, notWant := range c.wantNoLinks {
+			if strings.Contains(body, notWant) {
+				t.Fatalf("%s: want sidebar to NOT link %s, got: %s", c.role, notWant, body)
+			}
+		}
+	}
+
+	// Hiding the link is a navigation nicety, not a looser authorization
+	// boundary: GETting the route directly must still 403 (ADMINUI-05).
+	viewer := newClient(t)
+	adminUILogin(t, viewer, baseURL, "adminui-nav-viewer@example.com", "viewerpassword1")
+	direct := doGetNoRedirect(t, viewer, baseURL+"/admin/ui/owners")
+	if direct.StatusCode != http.StatusForbidden {
+		t.Fatalf("viewer GET /admin/ui/owners directly: want 403, got %d", direct.StatusCode)
+	}
+}

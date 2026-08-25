@@ -1,7 +1,8 @@
 // The admin UI from a developer-role seat: write access to the data
 // browser and Users panel (spec/admin-ui.md ADMINUI-13/27, developer+),
-// and the create-table form (ADMINUI-21, also developer+) — but still
-// blocked from Members, which needs admin+.
+// and the create-table form (ADMINUI-21, also developer+) — but the
+// sidebar offers nothing above that tier (ADMINUI-31), and Members
+// itself, which needs admin+, still blocks a direct visit.
 import { test, expect } from '@playwright/test';
 import { OWNER_EMAIL, OWNER_PASSWORD, createOwnerAccount, makeShotter, signIn, signOut } from './support';
 
@@ -22,6 +23,13 @@ test('a developer gets write controls on data and users, and can define a table,
     await signIn(page, devEmail, devPassword);
     await expect(page.locator('.badge-developer').first()).toBeVisible();
     await shot(page, 'dashboard');
+  });
+
+  await test.step('the sidebar offers no owner-plane pages at all', async () => {
+    for (const href of ['/admin/ui/owners', '/admin/ui/audit-log', '/admin/ui/maintenance', '/admin/ui/sql']) {
+      await expect(page.locator(`a.nav-item[href="${href}"]`)).toHaveCount(0);
+    }
+    await shot(page, 'sidebar-no-owner-plane');
   });
 
   await test.step('the data browser offers "New table"', async () => {
