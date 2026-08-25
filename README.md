@@ -1,4 +1,4 @@
-# baas
+# maubase
 
 A self-hostable Firebase/Supabase-alternative backend: single Go binary,
 SQLite by default (Postgres pluggable later), no Docker required.
@@ -48,7 +48,7 @@ What's here now (v1, step 1 of the roadmap):
   authorization server. Fixed, linearly-ranked roles (`owner` > `admin` >
   `developer` > `viewer`), not general RBAC — sized for one small team on
   one deployment, not a permissions engine. See `spec/owner-plane.md`.
-  - Bootstrap: set `BAAS_BOOTSTRAP_OWNER_EMAIL` / `_PASSWORD` on first run
+  - Bootstrap: set `MAUBASE_BOOTSTRAP_OWNER_EMAIL` / `_PASSWORD` on first run
     to create the first `owner` account; a no-op on every run after
   - `POST /admin/auth/login`, `POST /admin/auth/logout`,
     `GET /admin/auth/me`
@@ -64,7 +64,7 @@ What's here now (v1, step 1 of the roadmap):
     `spec/owner-plane.md`'s "Audit log" section, `internal/audit`.
 
 - Auto-REST (`internal/restapi`): every table in the database that isn't
-  one of baas's own internal tables becomes a `/api/data/{table}` CRUD
+  one of maubase's own internal tables becomes a `/api/data/{table}` CRUD
   resource, discovered by introspecting the schema — no separate
   config/admin step. A table with an `owner_id` column is automatically
   row-scoped to the calling token's subject (create/list/get/update/delete
@@ -76,8 +76,8 @@ What's here now (v1, step 1 of the roadmap):
     `PATCH /api/data/{table}/{id}` (partial update),
     `DELETE /api/data/{table}/{id}`
   - A deployment defines its own tables by dropping numbered `.sql` files
-    in `migrations/` (configurable via `BAAS_MIGRATIONS_DIR`) — applied
-    after baas's own embedded migrations, on every startup. This is the
+    in `migrations/` (configurable via `MAUBASE_MIGRATIONS_DIR`) — applied
+    after maubase's own embedded migrations, on every startup. This is the
     *only* way to add application tables; there's no dynamic
     schema-creation API in v1.
   - Known v1 limits: no composite primary keys, no BLOB columns, no
@@ -102,7 +102,7 @@ What's here now (v1, step 1 of the roadmap):
   scoped to whichever subject uploaded each file, same as the `owner_id`
   convention. Raw bytes are written to disk (`internal/storage.
   LocalBackend`, pluggable for a future S3-style backend) under
-  `BAAS_STORAGE_DIR`; metadata lives in a `files` table, reserved out of
+  `MAUBASE_STORAGE_DIR`; metadata lives in a `files` table, reserved out of
   auto-REST.
   - `POST /api/storage/files` (`multipart/form-data`, field `file`),
     `GET /api/storage/files` (paginated), `GET /api/storage/files/{id}`
@@ -122,9 +122,9 @@ What's here now (v1, step 1 of the roadmap):
 
 ## Compliance posture
 
-baas is self-hosted software, not a hosted service — so compliance
+maubase is self-hosted software, not a hosted service — so compliance
 obligations (GDPR controller duties, a SOC 2 audit, etc.) fall on whoever
-*deploys* it, not on this project. What baas can do is (a) not get in the
+*deploys* it, not on this project. What maubase can do is (a) not get in the
 way of that, and (b) provide the technical primitives a deployer would
 otherwise have to build themselves. Current state, split honestly:
 
@@ -141,7 +141,7 @@ otherwise have to build themselves. Current state, split honestly:
   investigation asks for.
 - **Explicitly left to the deployer**: encryption at rest (disk/OS-level),
   encryption in transit (TLS terminates at whatever reverse proxy sits in
-  front of baas — this project doesn't do TLS itself), backups, and data
+  front of maubase — this project doesn't do TLS itself), backups, and data
   residency (which region the VPS is in). These are infrastructure
   decisions, not something a Go binary should own.
 - **Missing**: nothing further code-shaped comes to mind right now — the
@@ -150,7 +150,7 @@ otherwise have to build themselves. Current state, split honestly:
   rate-limiting, still on the roadmap above, are general operational
   hygiene rather than compliance-specific.)
 
-None of this should be read as a compliance claim about baas itself —
+None of this should be read as a compliance claim about maubase itself —
 there isn't a meaningful sense in which self-hosted OSS "is" GDPR or SOC 2
 compliant. It's a description of which primitives exist today and which
 ones a deployer would still need to build or configure themselves.
@@ -160,29 +160,29 @@ ones a deployer would still need to build or configure themselves.
 ```sh
 make run
 # or
-go build -o bin/baas ./cmd/baas && ./bin/baas
+go build -o bin/maubase ./cmd/maubase && ./bin/maubase
 ```
 
 Config via env vars (see `internal/config`):
 
-- `BAAS_ADDR` (default `:8080`)
-- `BAAS_DB_PATH` (default `data/baas.db`)
-- `BAAS_ISSUER` (default `http://localhost:8080`) — this server's own
+- `MAUBASE_ADDR` (default `:8080`)
+- `MAUBASE_DB_PATH` (default `data/maubase.db`)
+- `MAUBASE_ISSUER` (default `http://localhost:8080`) — this server's own
   public base URL; must be what clients actually use to reach it, since
   it's baked into JWT `iss` claims and discovery metadata
-- `BAAS_BOOTSTRAP_OWNER_EMAIL` / `BAAS_BOOTSTRAP_OWNER_PASSWORD` — set both
+- `MAUBASE_BOOTSTRAP_OWNER_EMAIL` / `MAUBASE_BOOTSTRAP_OWNER_PASSWORD` — set both
   on first run to create the first owner-plane account; a no-op on every
   run after (see the owner plane section below)
-- `BAAS_MIGRATIONS_DIR` (default `migrations`) — where a deployment's own
+- `MAUBASE_MIGRATIONS_DIR` (default `migrations`) — where a deployment's own
   application-schema `.sql` files live; see the auto-REST section below
-- `BAAS_LOGIN_RATE_LIMIT` (default `10`) / `BAAS_LOGIN_RATE_WINDOW_SECONDS`
+- `MAUBASE_LOGIN_RATE_LIMIT` (default `10`) / `MAUBASE_LOGIN_RATE_WINDOW_SECONDS`
   (default `60`) — at most this many `POST /api/auth/login` or `POST
   /admin/auth/login` attempts per client IP per window
-- `BAAS_SESSION_CLEANUP_INTERVAL_SECONDS` (default `3600`) — how often the
+- `MAUBASE_SESSION_CLEANUP_INTERVAL_SECONDS` (default `3600`) — how often the
   background janitor purges expired session rows
-- `BAAS_STORAGE_DIR` (default `data/storage`) — where uploaded file bytes
+- `MAUBASE_STORAGE_DIR` (default `data/storage`) — where uploaded file bytes
   are written, one file per upload
-- `BAAS_MAX_UPLOAD_MB` (default `25`) — largest single file upload
+- `MAUBASE_MAX_UPLOAD_MB` (default `25`) — largest single file upload
   accepted; a bigger request body is rejected before it's fully read
 
 ## Testing

@@ -1,7 +1,7 @@
 # Auto-REST: tables become an API automatically
 
 Every table a deployment creates via its own migrations (see
-`internal/db.MigrateDir`) — not one of baas's own internal tables — is
+`internal/db.MigrateDir`) — not one of maubase's own internal tables — is
 automatically queryable and writable at `/api/data/{table}`, with no
 separate schema/config step. A table with an `owner_id` column is
 automatically scoped per-user; one without is shared. See
@@ -11,7 +11,7 @@ Every route requires an OAuth access token: `records:read` for `GET`,
 `records:write` for `POST`/`PATCH`/`DELETE`. There is no anonymous access.
 
 ## REST-COL-01: Internal tables are never exposed, regardless of token
-Given baas's own tables (`users`, `oauth_clients`, `owner_users`, etc.),
+Given maubase's own tables (`users`, `oauth_clients`, `owner_users`, etc.),
 when any request — with any token, any scope — is made to
 `/api/data/{that table}`,
 then the response is `404`, identical to a collection name that was never

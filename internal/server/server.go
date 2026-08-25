@@ -10,13 +10,13 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"baas/internal/audit"
-	"baas/internal/auth"
-	"baas/internal/oauth"
-	"baas/internal/ownerauth"
-	"baas/internal/ratelimit"
-	"baas/internal/restapi"
-	"baas/internal/storage"
+	"maubase/internal/audit"
+	"maubase/internal/auth"
+	"maubase/internal/oauth"
+	"maubase/internal/ownerauth"
+	"maubase/internal/ratelimit"
+	"maubase/internal/restapi"
+	"maubase/internal/storage"
 )
 
 type Server struct {

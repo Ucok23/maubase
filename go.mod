@@ -1,4 +1,4 @@
-module baas
+module maubase
 
 go 1.27.0
 

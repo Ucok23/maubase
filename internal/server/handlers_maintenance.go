@@ -3,13 +3,13 @@ package server
 import (
 	"net/http"
 
-	"baas/internal/audit"
-	"baas/internal/ownerauth"
+	"maubase/internal/audit"
+	"maubase/internal/ownerauth"
 )
 
 // handlePurgeSessions deletes every expired row from the customer-plane
 // sessions table and the owner-plane owner_sessions table, and reports
-// how many were removed. A background janitor (see cmd/baas) already does
+// how many were removed. A background janitor (see cmd/maubase) already does
 // this periodically; this endpoint exists for an operator to trigger it
 // on demand and see the result. Requires admin+ — see
 // spec/maintenance.md MAINT-01.

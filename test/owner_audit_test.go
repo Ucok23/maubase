@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"baas/internal/testserver"
+	"maubase/internal/testserver"
 )
 
 // Scenarios: spec/owner-plane.md, "Audit log" section (OWNR-11..17)

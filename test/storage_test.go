@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"testing"
 
-	"baas/internal/testserver"
+	"maubase/internal/testserver"
 )
 
 // Scenarios: spec/storage.md (STOR-01..08)

@@ -1,4 +1,4 @@
-// Package testserver boots a fully wired baas server — real SQLite file,
+// Package testserver boots a fully wired maubase server — real SQLite file,
 // real migrations, real auth, oauth, owner, and REST services — behind a
 // live HTTP listener, so tests in test/ exercise exactly the surface a
 // real client sees. Nothing here reaches into internals; it exists purely
@@ -13,26 +13,26 @@ import (
 	"testing"
 	"time"
 
-	"baas/internal/audit"
-	"baas/internal/auth"
-	"baas/internal/db"
-	"baas/internal/oauth"
-	"baas/internal/ownerauth"
-	"baas/internal/restapi"
-	"baas/internal/server"
-	"baas/internal/storage"
+	"maubase/internal/audit"
+	"maubase/internal/auth"
+	"maubase/internal/db"
+	"maubase/internal/oauth"
+	"maubase/internal/ownerauth"
+	"maubase/internal/restapi"
+	"maubase/internal/server"
+	"maubase/internal/storage"
 )
 
-// Options configures what a test server starts with, beyond baas's own
+// Options configures what a test server starts with, beyond maubase's own
 // built-in schema.
 type Options struct {
 	// BootstrapOwnerEmail/Password, if both set, seed a first owner-plane
-	// account the way BAAS_BOOTSTRAP_OWNER_EMAIL/_PASSWORD would on a real
+	// account the way MAUBASE_BOOTSTRAP_OWNER_EMAIL/_PASSWORD would on a real
 	// deployment's first run.
 	BootstrapOwnerEmail    string
 	BootstrapOwnerPassword string
 
-	// Schema is extra DDL (CREATE TABLE ...) run after baas's own
+	// Schema is extra DDL (CREATE TABLE ...) run after maubase's own
 	// migrations and before REST collection discovery — this is how a
 	// test gets its own application table(s) to exercise internal/restapi
 	// against, standing in for what a deployment's migrations/ directory
@@ -55,7 +55,7 @@ type Options struct {
 
 // New starts a server on an ephemeral local port and returns its base URL
 // (e.g. "http://127.0.0.1:53214"), with no owner account and no
-// application schema beyond baas's own tables.
+// application schema beyond maubase's own tables.
 func New(t *testing.T) string {
 	t.Helper()
 	return NewCustom(t, Options{})

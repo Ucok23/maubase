@@ -75,7 +75,7 @@ type Session struct {
 // SessionCookieName is deliberately distinct from auth.SessionCookieName:
 // an owner-plane session must never be mistaken for (or accepted as) a
 // customer-plane one, or vice versa.
-const SessionCookieName = "baas_owner_session"
+const SessionCookieName = "maubase_owner_session"
 
 // SessionTTL is shorter than the customer plane's: owner sessions guard
 // destructive/administrative operations, so a shorter idle window before

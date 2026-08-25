@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"baas/internal/testserver"
+	"maubase/internal/testserver"
 )
 
 // Scenarios: spec/maintenance.md (MAINT-01..04)

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"baas/internal/auth"
+	"maubase/internal/auth"
 )
 
 const sessionCookieName = auth.SessionCookieName
