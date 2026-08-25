@@ -5,7 +5,7 @@
 // browser immediately (ADMINUI-18), the same live-reload guarantee the
 // create-table form itself makes (ADMINUI-21).
 import { test, expect } from '@playwright/test';
-import { OWNER_EMAIL, OWNER_PASSWORD, acceptNextDialog, createOwnerAccount, makeShotter, signIn, signOut } from './support';
+import { OWNER_EMAIL, OWNER_PASSWORD, acceptNextDialog, createOwnerAccount, makeShotter, setSQLQuery, signIn, signOut } from './support';
 
 const shot = makeShotter(__filename);
 
@@ -98,14 +98,14 @@ test('an owner tours Members, Maintenance, a live-created table, and SQL Studio'
   });
 
   await test.step('running a SELECT', async () => {
-    await page.fill('textarea[name="query"]', 'select 1 as answer');
+    await setSQLQuery(page, 'select 1 as answer');
     await page.click('button:has-text("Run query")');
     await expect(page.getByText('1 row(s) returned')).toBeVisible();
     await shot(page, 'sql-select-result');
   });
 
   await test.step('running DDL that takes effect immediately', async () => {
-    await page.fill('textarea[name="query"]', `alter table ${tableName} add column note text`);
+    await setSQLQuery(page, `alter table ${tableName} add column note text`);
     await page.click('button:has-text("Run query")');
     await expect(page.getByText('row(s) affected')).toBeVisible();
     await shot(page, 'sql-ddl-result');

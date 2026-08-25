@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -633,7 +634,9 @@ func (s *Server) handleSQLStudioRun(w http.ResponseWriter, r *http.Request) {
 	query := r.FormValue("query")
 	data := map[string]any{"Title": "SQL Studio", "Nav": "sql", "Owner": owner, "Query": query}
 
+	start := time.Now()
 	cols, rows, affected, isQuery, err := runSQL(r.Context(), s.db, query)
+	data["DurationMS"] = time.Since(start).Milliseconds()
 
 	_ = s.audit.Record(r.Context(), audit.EventSQLExecuted,
 		audit.Actor{ID: owner.ID, Email: owner.Email}, audit.Target{},

@@ -14,7 +14,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}} · maubase admin</title>
 <link rel="stylesheet" href="/admin/ui/static/admin.css">
+{{if eq .Nav "sql"}}<link rel="stylesheet" href="/admin/ui/static/codemirror.min.css">{{end}}
 <script src="/admin/ui/static/htmx.min.js"></script>
+{{if eq .Nav "sql"}}<script src="/admin/ui/static/codemirror.min.js"></script><script src="/admin/ui/static/sql.min.js"></script>{{end}}
 </head>
 <body>
 <div class="shell">
