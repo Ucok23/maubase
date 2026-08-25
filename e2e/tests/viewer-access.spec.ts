@@ -19,6 +19,7 @@ test('a viewer can read the admin UI but sees no write controls, and is blocked 
   await test.step('provisioning a viewer account (as the bootstrap owner)', async () => {
     await signIn(page, OWNER_EMAIL, OWNER_PASSWORD);
     await createOwnerAccount(page, viewerEmail, viewerPassword, 'viewer');
+    await shot(page, 'provisioned');
     await signOut(page);
   });
 

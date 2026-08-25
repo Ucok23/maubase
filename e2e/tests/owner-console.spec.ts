@@ -15,6 +15,7 @@ test('an owner tours Members, Maintenance, a live-created table, and SQL Studio'
 
   await test.step('signing in as the bootstrap owner', async () => {
     await signIn(page, OWNER_EMAIL, OWNER_PASSWORD);
+    await shot(page, 'dashboard');
   });
 
   await test.step('opening Members', async () => {

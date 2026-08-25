@@ -14,6 +14,7 @@ test('a developer gets write controls on data and users, and can define a table,
   await test.step('provisioning a developer account (as the bootstrap owner)', async () => {
     await signIn(page, OWNER_EMAIL, OWNER_PASSWORD);
     await createOwnerAccount(page, devEmail, devPassword, 'developer');
+    await shot(page, 'provisioned');
     await signOut(page);
   });
 

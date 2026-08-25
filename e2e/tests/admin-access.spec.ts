@@ -16,6 +16,7 @@ test('an admin can read Members/Audit log/Maintenance, but not mutate owners or 
   await test.step('provisioning an admin account (as the bootstrap owner)', async () => {
     await signIn(page, OWNER_EMAIL, OWNER_PASSWORD);
     await createOwnerAccount(page, adminEmail, adminPassword, 'admin');
+    await shot(page, 'provisioned');
     await signOut(page);
   });
 
