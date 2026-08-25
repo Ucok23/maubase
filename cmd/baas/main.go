@@ -1,0 +1,114 @@
+// Command baas is the single-binary server: it opens the database, runs
+// migrations, and serves the HTTP API.
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"baas/internal/audit"
+	"baas/internal/auth"
+	"baas/internal/config"
+	"baas/internal/db"
+	"baas/internal/oauth"
+	"baas/internal/ownerauth"
+	"baas/internal/restapi"
+	"baas/internal/server"
+)
+
+func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
+	cfg := config.Load()
+
+	sqlDB, err := db.Open(cfg.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	if err := db.Migrate(sqlDB); err != nil {
+		return err
+	}
+	if err := db.MigrateDir(sqlDB, cfg.MigrationsDir); err != nil {
+		return fmt.Errorf("apply application migrations: %w", err)
+	}
+
+	authSvc := auth.NewService(sqlDB)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	oauthSvc, err := oauth.NewServer(ctx, sqlDB, authSvc, cfg.Issuer)
+	if err != nil {
+		return fmt.Errorf("init oauth server: %w", err)
+	}
+
+	ownerSvc := ownerauth.NewService(sqlDB)
+	if err := bootstrapOwner(ctx, ownerSvc, cfg); err != nil {
+		return fmt.Errorf("bootstrap owner: %w", err)
+	}
+
+	registry, err := restapi.Discover(ctx, sqlDB)
+	if err != nil {
+		return fmt.Errorf("discover rest collections: %w", err)
+	}
+	restapiSvc := restapi.NewServer(sqlDB, registry, oauthSvc)
+
+	auditLog := audit.New(sqlDB)
+
+	srv := server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, auditLog)
+
+	httpSrv := &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           srv,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	go func() {
+		<-ctx.Done()
+		log.Println("shutting down...")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("shutdown error: %v", err)
+		}
+	}()
+
+	log.Printf("listening on %s (db: %s)", cfg.Addr, cfg.DBPath)
+	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// bootstrapOwner creates the first owner-plane account from
+// BAAS_BOOTSTRAP_OWNER_EMAIL/_PASSWORD if both are set. It's a no-op once
+// any owner account exists (including on every later restart), and does
+// nothing at all if the env vars aren't set — the only way to get an
+// owner account is this, or an existing owner creating one via the API.
+func bootstrapOwner(ctx context.Context, svc *ownerauth.Service, cfg config.Config) error {
+	if cfg.BootstrapOwnerEmail == "" || cfg.BootstrapOwnerPassword == "" {
+		return nil
+	}
+	owner, err := svc.Bootstrap(ctx, cfg.BootstrapOwnerEmail, cfg.BootstrapOwnerPassword)
+	if errors.Is(err, ownerauth.ErrAlreadyBootstrapped) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	log.Printf("bootstrapped first owner: %s", owner.Email)
+	return nil
+}

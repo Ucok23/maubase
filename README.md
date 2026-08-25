@@ -1,0 +1,201 @@
+# baas
+
+A self-hostable Firebase/Supabase-alternative backend: single Go binary,
+SQLite by default (Postgres pluggable later), no Docker required.
+
+## Status: early scaffold
+
+What's here now (v1, step 1 of the roadmap):
+
+- Pure-Go SQLite (`modernc.org/sqlite`, no cgo) with WAL mode + embedded
+  file-based migrations, run automatically on startup.
+- Identity layer: email/password signup, login, cookie- or
+  bearer-token-backed sessions, `bcrypt` password hashing.
+- Minimal HTTP API on `chi`: `/api/auth/{signup,login,logout,me}`,
+  `/healthz`.
+- Account export and erasure: `GET /api/auth/me/export` returns the
+  caller's profile plus every row they own across every owner-scoped
+  auto-REST collection, grouped by collection name; `DELETE /api/auth/me`
+  deletes those same owned rows, revokes every outstanding OAuth grant
+  (authorize code/access/refresh token/PKCE request) issued to any
+  third-party client on the user's behalf, and then deletes the account
+  itself (which cascades to its sessions and OAuth consents). Both require
+  an authenticated session/token — see `spec/identity.md` IDNT-09..13.
+  OAuth grant revocation matches on the subject embedded in each grant's
+  stored session via SQLite's JSON1 extension (`internal/oauth.Storage.
+  RevokeForSubject`), since these tables don't carry a plain user-id
+  column — fine at the call rate account deletion runs at.
+
+- OAuth 2.1 authorization server (Fosite-backed, `internal/oauth`): lets
+  *your* users authorize third-party apps — including MCP clients —
+  against your API.
+  - Dynamic client registration: `POST /oauth/register` (RFC 7591)
+  - Authorize + built-in login/consent screens: `GET|POST /oauth/authorize`
+  - Token endpoint (authorization_code + refresh_token, PKCE mandatory):
+    `POST /oauth/token`
+  - Revocation: `POST /oauth/revoke` (RFC 7009)
+  - Discovery: `GET /.well-known/oauth-authorization-server` (RFC 8414),
+    `GET /.well-known/jwks.json`
+  - Access tokens are RS256 JWTs signed with a persisted, rotatable
+    keypair; scopes are a fixed vocabulary (`internal/oauth.AllowedScopes`)
+  - `GET /api/oauth/whoami` — demo endpoint protected by
+    `oauth.RequireScope`, proving the full register→authorize→token→call
+    loop; delete once the real auto-REST layer exists
+
+- Owner plane (`internal/ownerauth`): the team running this deployment,
+  entirely separate from the customer plane above — different table,
+  different session cookie, never reachable through the OAuth
+  authorization server. Fixed, linearly-ranked roles (`owner` > `admin` >
+  `developer` > `viewer`), not general RBAC — sized for one small team on
+  one deployment, not a permissions engine. See `spec/owner-plane.md`.
+  - Bootstrap: set `BAAS_BOOTSTRAP_OWNER_EMAIL` / `_PASSWORD` on first run
+    to create the first `owner` account; a no-op on every run after
+  - `POST /admin/auth/login`, `POST /admin/auth/logout`,
+    `GET /admin/auth/me`
+  - `GET /admin/owners` (admin+), `POST /admin/owners` (owner-only),
+    `DELETE /admin/owners/{id}` (owner-only; refuses to delete the last
+    remaining owner)
+  - `GET /admin/audit-log` (admin+, paginated via `?limit=&offset=`):
+    every login (successful or failed), logout, owner-account
+    create/delete, newest first. Actor and target identity (id + email)
+    are copied into each entry at write time rather than foreign-keyed, so
+    an entry stays fully readable — including naming exactly who did what
+    to whom — even after the account it refers to is later deleted. See
+    `spec/owner-plane.md`'s "Audit log" section, `internal/audit`.
+
+- Auto-REST (`internal/restapi`): every table in the database that isn't
+  one of baas's own internal tables becomes a `/api/data/{table}` CRUD
+  resource, discovered by introspecting the schema — no separate
+  config/admin step. A table with an `owner_id` column is automatically
+  row-scoped to the calling token's subject (create/list/get/update/delete
+  all filtered to "your own rows"); a table without one is shared. Gated
+  by the same `records:read`/`records:write` OAuth scopes reserved since
+  the authorization server was built. See `spec/auto-rest.md`.
+  - `GET /api/data/{table}` (paginated via `?limit=&offset=`),
+    `GET /api/data/{table}/{id}`, `POST /api/data/{table}`,
+    `PATCH /api/data/{table}/{id}` (partial update),
+    `DELETE /api/data/{table}/{id}`
+  - A deployment defines its own tables by dropping numbered `.sql` files
+    in `migrations/` (configurable via `BAAS_MIGRATIONS_DIR`) — applied
+    after baas's own embedded migrations, on every startup. This is the
+    *only* way to add application tables; there's no dynamic
+    schema-creation API in v1.
+  - Known v1 limits: no composite primary keys, no BLOB columns, no
+    filtering beyond pagination, single fixed owner-column convention
+    (`owner_id`) rather than per-table config.
+
+## Not yet built (see roadmap)
+
+- Row-level access rules beyond the owner_id convention (e.g. custom
+  per-collection policies).
+- Realtime subscriptions.
+- File storage.
+- Embedded admin UI (would sit on top of the owner plane above).
+- Session/token cleanup (expired rows are never purged) and login
+  rate-limiting.
+
+## Compliance posture
+
+baas is self-hosted software, not a hosted service — so compliance
+obligations (GDPR controller duties, a SOC 2 audit, etc.) fall on whoever
+*deploys* it, not on this project. What baas can do is (a) not get in the
+way of that, and (b) provide the technical primitives a deployer would
+otherwise have to build themselves. Current state, split honestly:
+
+- **Already there**: password hashing (bcrypt), session tokens stored
+  only as salted hashes (raw token never touches the DB), OAuth consent
+  records (`oauth_consents`) tracking which scopes a user granted to which
+  client, a real role-separated owner plane so "who can touch customer
+  data" has an actual answer, account export/erasure (`GET
+  /api/auth/me/export`, `DELETE /api/auth/me` — see above, including OAuth
+  grant revocation) covering the two concrete GDPR data-subject rights
+  that are actually code-shaped, and an owner-plane audit log
+  (`GET /admin/audit-log`) recording who did what to the deployment
+  itself — the first thing a real security review or incident
+  investigation asks for.
+- **Explicitly left to the deployer**: encryption at rest (disk/OS-level),
+  encryption in transit (TLS terminates at whatever reverse proxy sits in
+  front of baas — this project doesn't do TLS itself), backups, and data
+  residency (which region the VPS is in). These are infrastructure
+  decisions, not something a Go binary should own.
+- **Missing**: nothing further code-shaped comes to mind right now — the
+  rest of GDPR/SOC 2 is process and organizational, not something software
+  can satisfy on a deployer's behalf. (Session/token cleanup and login
+  rate-limiting, still on the roadmap above, are general operational
+  hygiene rather than compliance-specific.)
+
+None of this should be read as a compliance claim about baas itself —
+there isn't a meaningful sense in which self-hosted OSS "is" GDPR or SOC 2
+compliant. It's a description of which primitives exist today and which
+ones a deployer would still need to build or configure themselves.
+
+## Running it
+
+```sh
+make run
+# or
+go build -o bin/baas ./cmd/baas && ./bin/baas
+```
+
+Config via env vars (see `internal/config`):
+
+- `BAAS_ADDR` (default `:8080`)
+- `BAAS_DB_PATH` (default `data/baas.db`)
+- `BAAS_ISSUER` (default `http://localhost:8080`) — this server's own
+  public base URL; must be what clients actually use to reach it, since
+  it's baked into JWT `iss` claims and discovery metadata
+- `BAAS_BOOTSTRAP_OWNER_EMAIL` / `BAAS_BOOTSTRAP_OWNER_PASSWORD` — set both
+  on first run to create the first owner-plane account; a no-op on every
+  run after (see the owner plane section below)
+- `BAAS_MIGRATIONS_DIR` (default `migrations`) — where a deployment's own
+  application-schema `.sql` files live; see the auto-REST section below
+
+## Testing
+
+Tests are spec-first: [`spec/`](spec/) describes expected behavior from an
+external caller's point of view (browser, app, MCP client) — written and
+reviewed independently of the implementation, not derived from reading it.
+[`test/`](test/) is a black-box suite that drives a real, fully-wired
+server over plain HTTP (via `internal/testserver`) and asserts each spec
+scenario by its ID (e.g. `IDNT-04`, `AUTHZ-06`). A failing test names the
+exact sentence in `spec/` it's checking.
+
+```sh
+make test
+# or: go test ./...
+```
+
+When behavior needs to change, update the spec first, then the code, then
+watch the test go from red to green — not the other way around.
+
+## Try the auth flow
+
+```sh
+curl -c cj.txt -X POST localhost:8080/api/auth/signup \
+  -d '{"email":"you@example.com","password":"correcthorse"}'
+
+curl -b cj.txt localhost:8080/api/auth/me
+```
+
+## Design notes
+
+- `db.Open` sets `SetMaxOpenConns(1)`: SQLite only has one writer anyway,
+  so serializing at the pool level keeps error handling simple. Fine at
+  small-VPS scale; revisit only if profiling says otherwise.
+- Session tokens are random 32 bytes, stored server-side only as a SHA-256
+  hash — the raw token never touches the database.
+- The DB layer is plain `database/sql` with `?` placeholders kept out of
+  handlers, so a Postgres adapter can slot in later without touching the
+  HTTP layer.
+- The OAuth authorization server is a distinct layer from the identity
+  layer: it issues tokens *to third-party apps* on behalf of an identity,
+  and is what a resource server (an MCP server, say) checks — the plain
+  `/api/auth/*` session cookie is only for this server's own first-party
+  surfaces (its future admin UI, primarily).
+- **Known limitation**: Fosite's JWT signer only verifies against the
+  *current* signing key, so `oauth.RequireScope` (stateful, same-process
+  introspection) can't validate a token signed before a manual key
+  rotation. An external resource server verifying JWTs itself against
+  `/.well-known/jwks.json` doesn't have this problem — the token's header
+  carries the `kid` it was signed with, so the right key is always
+  selectable from the published set.

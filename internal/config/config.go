@@ -1,0 +1,47 @@
+// Package config loads runtime configuration from environment variables,
+// with sane defaults for local/single-VPS deployment.
+package config
+
+import "os"
+
+type Config struct {
+	// Addr is the HTTP listen address, e.g. ":8080".
+	Addr string
+	// DBPath is the path to the SQLite database file.
+	DBPath string
+	// Issuer is this server's own public base URL (e.g. "https://example.com"),
+	// used as the OAuth/JWT issuer and in discovery metadata. Must match what
+	// clients (including MCP clients) will actually use to reach this server.
+	Issuer string
+
+	// BootstrapOwnerEmail/Password, if both set, create the first owner-
+	// plane account (role "owner") on startup — but only when no owner
+	// account exists yet; every run after the first is a no-op. This is
+	// the one supported way to get an owner account without already being
+	// signed in as one.
+	BootstrapOwnerEmail    string
+	BootstrapOwnerPassword string
+
+	// MigrationsDir is where a deployment's own application-schema .sql
+	// files live (as opposed to baas's own embedded migrations). Missing
+	// entirely is fine — see db.MigrateDir.
+	MigrationsDir string
+}
+
+func Load() Config {
+	return Config{
+		Addr:                   getEnv("BAAS_ADDR", ":8080"),
+		DBPath:                 getEnv("BAAS_DB_PATH", "data/baas.db"),
+		Issuer:                 getEnv("BAAS_ISSUER", "http://localhost:8080"),
+		BootstrapOwnerEmail:    getEnv("BAAS_BOOTSTRAP_OWNER_EMAIL", ""),
+		BootstrapOwnerPassword: getEnv("BAAS_BOOTSTRAP_OWNER_PASSWORD", ""),
+		MigrationsDir:          getEnv("BAAS_MIGRATIONS_DIR", "migrations"),
+	}
+}
+
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}

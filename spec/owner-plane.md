@@ -1,0 +1,151 @@
+# Owner plane: the team running this deployment
+
+This is distinct from `identity.md` and the `oauth-*` specs, which are all
+about *customer* users — the end users of whatever app is built on this
+backend. The owner plane is about who can administer the backend itself:
+schema, OAuth clients, signing keys, other owner accounts. See the
+`internal/ownerauth` package doc for the full rationale.
+
+Roles, from least to most privileged: `viewer`, `developer`, `admin`,
+`owner`.
+
+## OWNR-01: The first owner is created by bootstrap, not signup
+Given a fresh deployment with no owner-plane accounts and
+`BAAS_BOOTSTRAP_OWNER_EMAIL`/`BAAS_BOOTSTRAP_OWNER_PASSWORD` set,
+when the server starts,
+then an owner-plane account with role `owner` exists for that email,
+and it can log in immediately.
+There is deliberately no public "sign up as an owner" endpoint — every
+owner-plane account traces back to either this bootstrap or an existing
+`owner` explicitly creating it.
+
+## OWNR-02: Bootstrap is a no-op once any owner exists
+Given an owner-plane account already exists (from a previous bootstrap or
+otherwise),
+when the server starts again with bootstrap env vars still set,
+then no new or duplicate account is created, and existing accounts are
+untouched — bootstrap only ever fires once per deployment.
+
+## OWNR-03: An owner can sign in and see their own identity, including role
+Given a bootstrapped owner account,
+when they `POST /admin/auth/login` with correct credentials,
+then the response is `200` with an expiry, and a separate owner-plane
+session cookie is set (never the customer-plane cookie).
+When they then `GET /admin/auth/me`,
+then the response is `200` with their id, email, and role.
+
+## OWNR-04: Wrong credentials are rejected
+When someone attempts `POST /admin/auth/login` with a wrong password,
+then the response is `401`, and no owner-plane session cookie is set.
+
+## OWNR-05: An anonymous request to any admin route is rejected
+Given no owner-plane session cookie,
+when a request is made to any `/admin/*` route that requires
+authentication,
+then the response is `401`.
+
+## OWNR-06: Only an owner-role account can create new owner-plane accounts
+Given a signed-in account with role `owner`,
+when they `POST /admin/owners` with an email, password, and any valid
+role,
+then the response is `201` with the new account's id, email, and role.
+
+Given a signed-in account with role `admin`, `developer`, or `viewer`
+instead,
+when they attempt the same request,
+then the response is `403` — creating owner-plane accounts is an
+owner-only capability, not just an authenticated one.
+
+## OWNR-07: Listing owner-plane accounts requires at least admin
+Given a signed-in account with role `admin` or `owner`,
+when they `GET /admin/owners`,
+then the response is `200` with the list of accounts.
+
+Given a signed-in account with role `developer` or `viewer`,
+when they attempt the same request,
+then the response is `403`.
+
+## OWNR-08: The last remaining owner can't be deleted
+Given exactly one account with role `owner`,
+when an owner attempts to `DELETE /admin/owners/{id}` for that account
+(including deleting themselves),
+then the response is `409 Conflict`, and the account is not deleted — a
+deployment must always retain at least one account that can administer
+it.
+
+Given a second `owner`-role account exists,
+when one of them is deleted,
+then it succeeds, since at least one `owner` remains.
+
+## OWNR-09: Owner-plane sessions and customer-plane sessions never cross
+Given a valid owner-plane session cookie,
+when it's presented to a customer-plane route (`GET /api/auth/me`),
+then it is not accepted as a valid customer session (`401`) — the two
+cookies are different, and neither plane's session validates against the
+other's.
+
+## OWNR-10: Logging out revokes the owner session immediately
+Given a signed-in owner-plane session,
+when they `POST /admin/auth/logout`,
+then the response is `204`, and that same session no longer
+authenticates `GET /admin/auth/me` (`401`).
+
+## Audit log
+
+Every security-relevant owner-plane action is recorded — not just allowed
+or denied, but written down: who did it (when known), what happened, and
+what/who it happened to. This is what a real incident review or compliance
+audit asks for first; see the README's compliance-posture notes.
+
+## OWNR-11: A successful owner login is recorded
+Given a bootstrapped owner account,
+when they `POST /admin/auth/login` successfully,
+then a new entry appears in the audit log with event `login`, that
+account as the actor, and a timestamp at or after the request.
+
+## OWNR-12: A failed owner login is recorded, even for an unknown email
+When someone `POST /admin/auth/login`s with a wrong password, or an email
+that doesn't correspond to any account,
+then a new entry appears in the audit log with event `login_failed` and
+the attempted email recorded — a failed authentication attempt is exactly
+the kind of event an audit trail exists to capture, whether or not the
+account is real.
+
+## OWNR-13: Logging out is recorded
+Given a signed-in owner-plane session,
+when they `POST /admin/auth/logout`,
+then a new entry appears in the audit log with event `logout` and that
+account as the actor.
+
+## OWNR-14: Creating an owner-plane account is recorded, including who did it
+Given a signed-in `owner`-role account,
+when they `POST /admin/owners` to create a new account,
+then a new entry appears in the audit log with event `owner_create`, the
+creator recorded as actor, and the newly created account recorded as
+target (id, email, and the role it was created with).
+
+## OWNR-15: Deleting an owner-plane account is recorded, including who did it and who was removed
+Given a signed-in `owner`-role account and a second owner-plane account
+that can legally be deleted,
+when they `DELETE /admin/owners/{id}` for that second account,
+then a new entry appears in the audit log with event `owner_delete`, the
+deleter recorded as actor, and the removed account recorded as target
+(id, email, and the role it had) — even though, by the time anyone reads
+the log, that account no longer exists.
+
+## OWNR-16: Reading the audit log requires at least admin
+Given a signed-in account with role `admin` or `owner`,
+when they `GET /admin/audit-log`,
+then the response is `200` with entries ordered newest first.
+
+Given a signed-in account with role `developer` or `viewer`,
+when they attempt the same request,
+then the response is `403`.
+
+## OWNR-17: An audit entry survives deletion of the account it refers to
+Given an `owner_create` entry recording some account as its target,
+when that account is later deleted (via `owner_delete`, which is itself
+also recorded per OWNR-15),
+then the original `owner_create` entry is unchanged and still shows that
+account's email — deleting an account doesn't erase the history of what
+it did or what was done to it.

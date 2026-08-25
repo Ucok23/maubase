@@ -1,0 +1,145 @@
+package e2e_test
+
+import (
+	"net/http"
+	"testing"
+
+	"baas/internal/testserver"
+)
+
+// Scenarios: spec/oauth-token.md
+
+func TestOAuthToken_ValidCodeAndPKCEYieldsToken(t *testing.T) {
+	baseURL := testserver.New(t)
+	clientID := registerPublicClient(t, baseURL, testRedirectURI, "profile")
+
+	client := newClient(t)
+	signUp(t, client, baseURL, "tok01@example.com", "correcthorse")
+
+	// TOK-01
+	tok := authorizeAndGetToken(t, client, baseURL, clientID, testRedirectURI, []string{"profile"})
+	if tok["access_token"] == nil || tok["access_token"] == "" {
+		t.Fatalf("want an access_token, got %v", tok)
+	}
+	if tok["expires_in"] == nil {
+		t.Fatalf("want an expiry, got %v", tok)
+	}
+	if tok["scope"] != "profile" {
+		t.Fatalf("want granted scope 'profile', got %v", tok["scope"])
+	}
+}
+
+func TestOAuthToken_WrongVerifierRejected(t *testing.T) {
+	baseURL := testserver.New(t)
+	clientID := registerPublicClient(t, baseURL, testRedirectURI, "profile")
+
+	client := newClient(t)
+	signUp(t, client, baseURL, "tok02@example.com", "correcthorse")
+
+	_, challenge := pkcePair(t)
+	q := authorizeParams(clientID, testRedirectURI, "profile", "somestate12345678", challenge)
+	resp := approveConsent(t, client, baseURL, q, []string{"profile"}, true)
+	code := locationQuery(t, resp).Get("code")
+
+	// TOK-02: a verifier that doesn't match the challenge used above.
+	status, tok := exchangeCode(t, baseURL, code, testRedirectURI, clientID, "wrong-verifier-wrong-verifier-wrong")
+	if status != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %v", status, tok)
+	}
+	if tok["error"] != "invalid_grant" {
+		t.Fatalf("want error=invalid_grant, got %v", tok["error"])
+	}
+	if tok["access_token"] != nil {
+		t.Fatalf("want no access_token issued, got %v", tok)
+	}
+}
+
+func TestOAuthToken_CodeCannotBeReused(t *testing.T) {
+	baseURL := testserver.New(t)
+	clientID := registerPublicClient(t, baseURL, testRedirectURI, "profile")
+
+	client := newClient(t)
+	signUp(t, client, baseURL, "tok03@example.com", "correcthorse")
+
+	verifier, challenge := pkcePair(t)
+	q := authorizeParams(clientID, testRedirectURI, "profile", "somestate12345678", challenge)
+	resp := approveConsent(t, client, baseURL, q, []string{"profile"}, true)
+	code := locationQuery(t, resp).Get("code")
+
+	firstStatus, first := exchangeCode(t, baseURL, code, testRedirectURI, clientID, verifier)
+	if firstStatus != http.StatusOK {
+		t.Fatalf("setup: first exchange should succeed, got %d: %v", firstStatus, first)
+	}
+
+	// TOK-03: replaying the same code a second time must not work.
+	secondStatus, second := exchangeCode(t, baseURL, code, testRedirectURI, clientID, verifier)
+	if secondStatus != http.StatusBadRequest {
+		t.Fatalf("want 400 on code reuse, got %d: %v", secondStatus, second)
+	}
+	if second["access_token"] != nil {
+		t.Fatalf("want no token from a replayed code, got %v", second)
+	}
+}
+
+func TestOAuthToken_RefreshTokenOnlyWithOfflineAccess(t *testing.T) {
+	baseURL := testserver.New(t)
+	clientID := registerPublicClient(t, baseURL, testRedirectURI, "profile offline_access")
+
+	// TOK-04, part 1: offline_access granted -> refresh_token present.
+	withOffline := newClient(t)
+	signUp(t, withOffline, baseURL, "tok04a@example.com", "correcthorse")
+	tokWith := authorizeAndGetToken(t, withOffline, baseURL, clientID, testRedirectURI, []string{"profile", "offline_access"})
+	if tokWith["refresh_token"] == nil || tokWith["refresh_token"] == "" {
+		t.Fatalf("want a refresh_token when offline_access was granted, got %v", tokWith)
+	}
+
+	// TOK-04, part 2: offline_access NOT granted -> no refresh_token.
+	withoutOffline := newClient(t)
+	signUp(t, withoutOffline, baseURL, "tok04b@example.com", "correcthorse")
+	tokWithout := authorizeAndGetToken(t, withoutOffline, baseURL, clientID, testRedirectURI, []string{"profile"})
+	if v, has := tokWithout["refresh_token"]; has && v != "" {
+		t.Fatalf("want no refresh_token when offline_access was not granted, got %v", v)
+	}
+}
+
+func TestOAuthToken_RefreshTokenRotates(t *testing.T) {
+	baseURL := testserver.New(t)
+	clientID := registerPublicClient(t, baseURL, testRedirectURI, "profile offline_access")
+
+	client := newClient(t)
+	signUp(t, client, baseURL, "tok05@example.com", "correcthorse")
+	tok := authorizeAndGetToken(t, client, baseURL, clientID, testRedirectURI, []string{"profile", "offline_access"})
+	oldRefresh, _ := tok["refresh_token"].(string)
+	if oldRefresh == "" {
+		t.Fatalf("setup: want a refresh_token, got %v", tok)
+	}
+
+	// TOK-05: redeeming the refresh token yields new tokens...
+	form := map[string][]string{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {oldRefresh},
+		"client_id":     {clientID},
+	}
+	resp, err := http.PostForm(baseURL+"/oauth/token", form)
+	if err != nil {
+		t.Fatalf("POST /oauth/token (refresh): %v", err)
+	}
+	refreshed := decodeJSONMap(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %v", resp.StatusCode, refreshed)
+	}
+	newRefresh, _ := refreshed["refresh_token"].(string)
+	if newRefresh == "" || newRefresh == oldRefresh {
+		t.Fatalf("want a new, different refresh_token, got %q (old was %q)", newRefresh, oldRefresh)
+	}
+
+	// ...and the old refresh token no longer works.
+	replay, err := http.PostForm(baseURL+"/oauth/token", form)
+	if err != nil {
+		t.Fatalf("POST /oauth/token (replay old refresh token): %v", err)
+	}
+	replayBody := decodeJSONMap(t, replay)
+	if replay.StatusCode == http.StatusOK {
+		t.Fatalf("want the rotated-out refresh token to be rejected, got 200: %v", replayBody)
+	}
+}
