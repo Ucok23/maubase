@@ -1,0 +1,6 @@
+{{define "forbidden"}}{{template "header" .}}
+<div class="empty-state">
+<h2 style="margin-top:0">403 — Forbidden</h2>
+<p>Your role (<span class="badge badge-{{.Owner.Role}}">{{.Owner.Role}}</span>) doesn't have access to this page.</p>
+</div>
+{{template "footer" .}}{{end}}

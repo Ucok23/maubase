@@ -1,0 +1,24 @@
+{{define "login"}}<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · maubase admin</title>
+<link rel="stylesheet" href="/admin/ui/static/admin.css">
+</head>
+<body>
+<div class="login-shell">
+<div class="login-card">
+<h1>maubase<span style="color:var(--accent)">•</span>admin</h1>
+<p class="sub">Sign in with your owner-plane account</p>
+{{if .Error}}<div class="alert">{{.Error}}</div>{{end}}
+<form method="POST" action="/admin/ui/login">
+<div class="field"><label>Email</label><input type="email" name="email" value="{{.Email}}" required autofocus></div>
+<div class="field"><label>Password</label><input type="password" name="password" required></div>
+<button type="submit" class="btn btn-primary">Sign in</button>
+</form>
+</div>
+</div>
+</body>
+</html>
+{{end}}

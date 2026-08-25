@@ -1,0 +1,14 @@
+{{define "data_row_edit"}}{{template "header" .}}
+<p class="meta-line"><a href="/admin/ui/data/{{.Collection.Name}}">← back to {{.Collection.Name}}</a></p>
+<form method="POST" action="/admin/ui/data/{{.Collection.Name}}/{{index .Row .Collection.PKColumn}}" class="form-card">
+{{$row := .Row}}
+{{range .Collection.Columns}}
+{{if .IsPK}}
+<div class="field field-inline-code"><label>{{.Name}} (id, read-only)</label><input type="text" value="{{index $row .Name}}" disabled></div>
+{{else}}
+<div class="field"><label>{{.Name}}</label><input type="text" name="{{.Name}}" value="{{index $row .Name}}"></div>
+{{end}}
+{{end}}
+<button type="submit" class="btn btn-primary">Save changes</button>
+</form>
+{{template "footer" .}}{{end}}

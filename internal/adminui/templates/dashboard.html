@@ -1,0 +1,25 @@
+{{define "dashboard"}}{{template "header" .}}
+<p class="meta-line">Signed in as {{.Owner.Email}} · <span class="badge badge-{{.Owner.Role}}">{{.Owner.Role}}</span></p>
+<div class="card-grid">
+<article class="card">
+<h3>Data</h3>
+<p>Browse and edit application tables — every row, regardless of owner.</p>
+<a href="/admin/ui/data" class="btn btn-outline">Open →</a>
+</article>
+<article class="card">
+<h3>Owners</h3>
+<p>Manage who can administer this deployment.</p>
+<a href="/admin/ui/owners" class="btn btn-outline">Open →</a>
+</article>
+<article class="card">
+<h3>Audit log</h3>
+<p>See who did what, and when.</p>
+<a href="/admin/ui/audit-log" class="btn btn-outline">Open →</a>
+</article>
+<article class="card">
+<h3>Maintenance</h3>
+<p>Purge expired sessions on demand.</p>
+<a href="/admin/ui/maintenance" class="btn btn-outline">Open →</a>
+</article>
+</div>
+{{template "footer" .}}{{end}}

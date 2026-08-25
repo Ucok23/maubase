@@ -1,0 +1,25 @@
+{{define "audit_log"}}{{template "header" .}}
+{{if .Entries}}
+<div class="table-wrap">
+<table class="data-table">
+<thead><tr><th>When</th><th>Event</th><th>Actor</th><th>Target</th></tr></thead>
+<tbody>
+{{range .Entries}}
+<tr>
+<td>{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
+<td><span class="badge badge-developer">{{.Event}}</span></td>
+<td>{{.ActorEmail}}</td>
+<td>{{.TargetEmail}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+</div>
+{{else}}
+<div class="empty-state">No entries yet.</div>
+{{end}}
+<nav class="pagination">
+{{if gt .Offset 0}}<a class="btn btn-outline btn-sm" href="?limit={{.Limit}}&offset={{sub .Offset .Limit}}">← Newer</a>{{end}}
+{{if eq (len .Entries) .Limit}}<a class="btn btn-outline btn-sm" href="?limit={{.Limit}}&offset={{add .Offset .Limit}}">Older →</a>{{end}}
+</nav>
+{{template "footer" .}}{{end}}

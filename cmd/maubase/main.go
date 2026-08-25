@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"maubase/internal/adminui"
 	"maubase/internal/audit"
 	"maubase/internal/auth"
 	"maubase/internal/config"
@@ -80,7 +81,9 @@ func run() error {
 
 	auditLog := audit.New(sqlDB)
 
-	srv := server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, auditLog, cfg.LoginRateLimit, cfg.LoginRateWindow)
+	adminuiSvc := adminui.NewServer(authSvc, ownerSvc, restapiSvc, auditLog)
+
+	srv := server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, adminuiSvc, auditLog, cfg.LoginRateLimit, cfg.LoginRateWindow)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,

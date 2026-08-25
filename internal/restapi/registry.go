@@ -111,6 +111,17 @@ func (r *Registry) Get(name string) (*Collection, bool) {
 	return c, ok
 }
 
+// All returns every exposed collection, sorted by name — used by the
+// embedded admin UI's data browser (spec/admin-ui.md ADMINUI-11).
+func (r *Registry) All() []*Collection {
+	out := make([]*Collection, 0, len(r.collections))
+	for _, c := range r.collections {
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
 // ownedCollections returns every registered collection with row-level
 // ownership (i.e. an owner_id column), sorted by name for deterministic
 // iteration — used by account export/erasure, where output order and

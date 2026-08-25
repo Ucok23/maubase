@@ -1,0 +1,14 @@
+{{define "data_collections"}}{{template "header" .}}
+{{if .Collections}}
+<div class="card-grid">
+{{range .Collections}}
+<a href="/admin/ui/data/{{.Name}}" class="card" style="text-decoration:none;display:block">
+<h3>{{.Name}}</h3>
+<p style="min-height:0">{{len .Columns}} column{{if ne (len .Columns) 1}}s{{end}}{{if .OwnerColumn}} · owner-scoped{{else}} · shared{{end}}</p>
+</a>
+{{end}}
+</div>
+{{else}}
+<div class="empty-state">No application tables yet — add one via your own migrations (see <code>MAUBASE_MIGRATIONS_DIR</code>).</div>
+{{end}}
+{{template "footer" .}}{{end}}

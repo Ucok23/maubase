@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"maubase/internal/adminui"
 	"maubase/internal/audit"
 	"maubase/internal/auth"
 	"maubase/internal/db"
@@ -173,7 +174,9 @@ func newCustom(t *testing.T, opts Options) (string, error) {
 
 	auditLog := audit.New(sqlDB)
 
-	httpSrv := &http.Server{Handler: server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, auditLog, opts.LoginRateLimit, opts.LoginRateWindow)}
+	adminuiSvc := adminui.NewServer(authSvc, ownerSvc, restapiSvc, auditLog)
+
+	httpSrv := &http.Server{Handler: server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, adminuiSvc, auditLog, opts.LoginRateLimit, opts.LoginRateWindow)}
 	go httpSrv.Serve(lis) //nolint:errcheck // Serve always returns non-nil; Close() below triggers it deliberately
 	t.Cleanup(func() { httpSrv.Close() })
 
