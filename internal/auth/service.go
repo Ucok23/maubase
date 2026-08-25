@@ -141,6 +141,69 @@ func (s *Service) DeleteUser(ctx context.Context, id string) error {
 	return nil
 }
 
+// ListUsers returns customer accounts newest-first, paginated. Backs the
+// embedded admin UI's Users panel (internal/adminui, spec/admin-ui.md
+// ADMINUI-25) — never exposed on the customer-facing API.
+func (s *Service) ListUsers(ctx context.Context, limit, offset int) ([]*User, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, email, created_at, updated_at FROM users
+		ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?
+	`, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	defer rows.Close()
+	out := []*User{}
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Email, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &u)
+	}
+	return out, rows.Err()
+}
+
+// CountUsers returns the total number of customer accounts, for pagination.
+func (s *Service) CountUsers(ctx context.Context) (int, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count users: %w", err)
+	}
+	return n, nil
+}
+
+// GetUser fetches one customer account by id — exported for the admin UI's
+// user-detail page (getUserByID stays unexported, used internally by the
+// signup/login paths).
+func (s *Service) GetUser(ctx context.Context, id string) (*User, error) {
+	return s.getUserByID(ctx, id)
+}
+
+// CountActiveSessions reports how many non-expired sessions userID
+// currently holds — shown on the admin UI's user-detail page (ADMINUI-26).
+func (s *Service) CountActiveSessions(ctx context.Context, userID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sessions WHERE user_id = ? AND expires_at > ?
+	`, userID, time.Now()).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count active sessions: %w", err)
+	}
+	return n, nil
+}
+
+// RevokeAllSessions deletes every session belonging to userID — "sign out
+// everywhere" for one customer account, without deleting the account
+// itself (spec/admin-ui.md ADMINUI-29). Returns how many were revoked.
+func (s *Service) RevokeAllSessions(ctx context.Context, userID string) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID)
+	if err != nil {
+		return 0, fmt.Errorf("revoke sessions: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 // PurgeExpiredSessions deletes every session row whose expires_at has
 // already passed, and reports how many were removed. Expired sessions
 // already fail ValidateSession, so this is purely storage hygiene (a

@@ -1,0 +1,22 @@
+{{define "user_detail"}}{{template "header" .}}
+<p class="meta-line"><a href="/admin/ui/users">← all users</a></p>
+
+<div class="form-card">
+<div class="field"><label>Email</label><div>{{.User.Email}}</div></div>
+<div class="field"><label>ID</label><div style="font-family:var(--font)">{{.User.ID}}</div></div>
+<div class="field"><label>Created</label><div>{{.User.CreatedAt.Format "2006-01-02 15:04:05"}}</div></div>
+<div class="field"><label>Updated</label><div>{{.User.UpdatedAt.Format "2006-01-02 15:04:05"}}</div></div>
+<div class="field"><label>Active sessions</label><div>{{.SessionCount}}</div></div>
+</div>
+
+{{if .CanWrite}}
+<div class="actions" style="margin-top:1rem">
+<form method="POST" action="/admin/ui/users/{{.User.ID}}/revoke-sessions" style="display:inline" onsubmit="return confirm('Sign out {{.User.Email}} everywhere?')">
+<button type="submit" class="btn btn-outline">Sign out everywhere</button>
+</form>
+<form method="POST" action="/admin/ui/users/{{.User.ID}}/delete" style="display:inline" onsubmit="return confirm('Permanently delete {{.User.Email}}? This deletes all their data and cannot be undone.')">
+<button type="submit" class="btn btn-danger">Delete account</button>
+</form>
+</div>
+{{end}}
+{{template "footer" .}}{{end}}
