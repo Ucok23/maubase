@@ -87,6 +87,22 @@ code { font-family: var(--font-mono); background: #f1f2f4; padding: 1px 5px; bor
 
 .sidebar-nav { flex: 1; padding: 12px; display: flex; flex-direction: column; gap: 2px; }
 
+/* Two labeled groups below the un-grouped Dashboard link: which plane a
+   page belongs to (owner-plane accounts/audit/maintenance/SQL vs.
+   customer-plane data/accounts) is the same split spec/admin-ui.md and
+   spec/owner-plane.md already draw in prose — this just makes it visible
+   in the sidebar itself. */
+.nav-group { display: flex; flex-direction: column; gap: 2px; margin-top: 16px; }
+.nav-group-label {
+  padding: 4px 12px 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--sidebar-fg);
+  opacity: .6;
+}
+
 .nav-item {
   display: flex;
   align-items: center;
