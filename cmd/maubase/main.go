@@ -81,7 +81,7 @@ func run() error {
 
 	auditLog := audit.New(sqlDB)
 
-	adminuiSvc := adminui.NewServer(authSvc, ownerSvc, restapiSvc, auditLog)
+	adminuiSvc := adminui.NewServer(sqlDB, authSvc, ownerSvc, restapiSvc, auditLog)
 
 	srv := server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, adminuiSvc, auditLog, cfg.LoginRateLimit, cfg.LoginRateWindow)
 

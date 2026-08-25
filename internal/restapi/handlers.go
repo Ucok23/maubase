@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -26,8 +27,14 @@ const (
 )
 
 type Server struct {
-	db       *sql.DB
-	registry *Registry
+	db *sql.DB
+	// registry is an atomic pointer rather than a plain field: the admin
+	// UI's "create table" and SQL Studio (internal/adminui) can add
+	// tables at runtime, and ReloadSchema swaps in a freshly discovered
+	// Registry so those show up in auto-REST without a restart — see
+	// Registry's own doc comment, which used to say schema changes
+	// needed one.
+	registry atomic.Pointer[Registry]
 	oauth    *oauth.Server
 	// broker is nil-able: a caller that doesn't want realtime fan-out
 	// (or hasn't built internal/realtime in yet) can pass nil, and
@@ -36,7 +43,25 @@ type Server struct {
 }
 
 func NewServer(db *sql.DB, registry *Registry, oauthSvc *oauth.Server, broker *realtime.Broker) *Server {
-	return &Server{db: db, registry: registry, oauth: oauthSvc, broker: broker}
+	s := &Server{db: db, oauth: oauthSvc, broker: broker}
+	s.registry.Store(registry)
+	return s
+}
+
+// ReloadSchema re-runs Discover and swaps it in atomically, so a table
+// created or dropped after startup (via internal/adminui's "create
+// table" or SQL Studio) is reflected in auto-REST without a restart.
+func (s *Server) ReloadSchema(ctx context.Context) error {
+	reg, err := Discover(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("reload schema: %w", err)
+	}
+	s.registry.Store(reg)
+	return nil
+}
+
+func (s *Server) reg() *Registry {
+	return s.registry.Load()
 }
 
 // publish hands ev to the realtime broker, if there is one — except when
@@ -334,7 +359,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 // same ownership convention enforced everywhere else in this package.
 func (s *Server) ExportOwned(ctx context.Context, subj string) (map[string][]map[string]any, error) {
 	out := map[string][]map[string]any{}
-	for _, col := range s.registry.ownedCollections() {
+	for _, col := range s.reg().ownedCollections() {
 		query := fmt.Sprintf("SELECT * FROM %s WHERE %s = ?", quoteIdent(col.Name), quoteIdent(col.OwnerColumn))
 		rows, err := s.db.QueryContext(ctx, query, subj)
 		if err != nil {
@@ -357,7 +382,7 @@ func (s *Server) ExportOwned(ctx context.Context, subj string) (map[string][]map
 // ever have been authorized to see any of these rows, so that's the only
 // one this can notify, same as an ordinary DELETE would.
 func (s *Server) DeleteOwned(ctx context.Context, subj string) error {
-	for _, col := range s.registry.ownedCollections() {
+	for _, col := range s.reg().ownedCollections() {
 		var ids []string
 		if s.broker != nil {
 			var err error
@@ -406,7 +431,7 @@ func (s *Server) pkValuesForOwner(ctx context.Context, col *Collection, subj str
 // after RequireScope, so an unauthenticated or wrongly-scoped request
 // never learns whether a collection exists at all.
 func (s *Server) collection(w http.ResponseWriter, r *http.Request) (*Collection, bool) {
-	col, ok := s.registry.Get(chi.URLParam(r, "collection"))
+	col, ok := s.reg().Get(chi.URLParam(r, "collection"))
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such collection"})
 		return nil, false
