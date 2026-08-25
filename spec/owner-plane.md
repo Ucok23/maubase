@@ -11,7 +11,7 @@ Roles, from least to most privileged: `viewer`, `developer`, `admin`,
 
 ## OWNR-01: The first owner is created by bootstrap, not signup
 Given a fresh deployment with no owner-plane accounts and
-`BAAS_BOOTSTRAP_OWNER_EMAIL`/`BAAS_BOOTSTRAP_OWNER_PASSWORD` set,
+`MAUBASE_BOOTSTRAP_OWNER_EMAIL`/`MAUBASE_BOOTSTRAP_OWNER_PASSWORD` set,
 when the server starts,
 then an owner-plane account with role `owner` exists for that email,
 and it can log in immediately.

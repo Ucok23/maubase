@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS oauth_consents (
 -- Persists the authorization server's JWT signing keypair (RSA, PKCS#8 DER)
 -- so it survives restarts. "current" is the active signing key; older rows
 -- are kept and published in the JWKS for verifying already-issued tokens
--- until they're pruned by `baas keys rotate --prune`.
+-- until they're pruned by `maubase keys rotate --prune`.
 CREATE TABLE IF NOT EXISTS oauth_signing_keys (
     kid         TEXT PRIMARY KEY,
     private_der BLOB NOT NULL,

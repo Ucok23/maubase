@@ -1,4 +1,4 @@
-// Command baas is the single-binary server: it opens the database, runs
+// Command maubase is the single-binary server: it opens the database, runs
 // migrations, and serves the HTTP API.
 package main
 
@@ -13,15 +13,15 @@ import (
 	"syscall"
 	"time"
 
-	"baas/internal/audit"
-	"baas/internal/auth"
-	"baas/internal/config"
-	"baas/internal/db"
-	"baas/internal/oauth"
-	"baas/internal/ownerauth"
-	"baas/internal/restapi"
-	"baas/internal/server"
-	"baas/internal/storage"
+	"maubase/internal/audit"
+	"maubase/internal/auth"
+	"maubase/internal/config"
+	"maubase/internal/db"
+	"maubase/internal/oauth"
+	"maubase/internal/ownerauth"
+	"maubase/internal/restapi"
+	"maubase/internal/server"
+	"maubase/internal/storage"
 )
 
 func main() {
@@ -131,7 +131,7 @@ func runSessionJanitor(ctx context.Context, authSvc *auth.Service, ownerSvc *own
 }
 
 // bootstrapOwner creates the first owner-plane account from
-// BAAS_BOOTSTRAP_OWNER_EMAIL/_PASSWORD if both are set. It's a no-op once
+// MAUBASE_BOOTSTRAP_OWNER_EMAIL/_PASSWORD if both are set. It's a no-op once
 // any owner account exists (including on every later restart), and does
 // nothing at all if the env vars aren't set — the only way to get an
 // owner account is this, or an existing owner creating one via the API.

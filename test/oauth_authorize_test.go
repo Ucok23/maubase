@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"baas/internal/testserver"
+	"maubase/internal/testserver"
 )
 
 // Scenarios: spec/oauth-authorize-and-consent.md

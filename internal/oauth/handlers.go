@@ -8,7 +8,7 @@ import (
 	"github.com/ory/fosite"
 	fosOAuth2 "github.com/ory/fosite/handler/oauth2"
 
-	"baas/internal/auth"
+	"maubase/internal/auth"
 )
 
 // HandleAuthorize serves both steps of the browser-facing side of the

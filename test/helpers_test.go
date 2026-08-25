@@ -1,4 +1,4 @@
-// Package e2e_test drives a real, running baas server purely over HTTP —
+// Package e2e_test drives a real, running maubase server purely over HTTP —
 // no reaching into internal packages beyond testserver.New — so these
 // tests see exactly what an external client sees. Each test references
 // the spec scenario ID (see /spec) it verifies.

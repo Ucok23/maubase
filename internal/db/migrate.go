@@ -15,7 +15,7 @@ var migrationsFS embed.FS
 // Migrate applies every migration in migrations/ that hasn't run yet, in
 // filename order (hence the 0001_, 0002_... prefixes). Applied migrations
 // are tracked in schema_migrations so this is safe to call on every
-// startup. This is baas's own internal schema (identity/oauth/owner
+// startup. This is maubase's own internal schema (identity/oauth/owner
 // tables) — see MigrateDir for a deployment's own application schema.
 func Migrate(sqlDB *sql.DB) error {
 	if err := ensureMigrationsTable(sqlDB); err != nil {
@@ -45,7 +45,7 @@ func MigrateDir(sqlDB *sql.DB, dir string) error {
 	}
 	// "app:" namespaces these versions in schema_migrations so a disk
 	// migration can never collide with (or be confused for) one of
-	// baas's own embedded ones, even if the filenames happen to match.
+	// maubase's own embedded ones, even if the filenames happen to match.
 	return applyMigrations(sqlDB, os.DirFS(dir), ".", "app:")
 }
 

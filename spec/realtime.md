@@ -28,7 +28,7 @@ others. The server then pushes one JSON message per change:
 pushed to a given subscriber only if that subscriber's token could `GET`
 that row through the ordinary REST endpoint right now — the fan-out
 lives at the same write path auto-REST's handlers already go through, so
-it can't be bypassed by writing some other way (including baas's own
+it can't be bypassed by writing some other way (including maubase's own
 account-erasure cascades).
 
 There is no replay or backfill in v1: a subscription only ever sees

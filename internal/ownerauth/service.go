@@ -30,7 +30,7 @@ func NewService(db *sql.DB) *Service {
 // owner-plane account exists yet. This is the one place an owner account
 // can be created without already being signed in as one — solving the
 // chicken-and-egg problem of an admin surface nothing can yet administer.
-// It's meant to be called once at startup from BAAS_BOOTSTRAP_OWNER_EMAIL
+// It's meant to be called once at startup from MAUBASE_BOOTSTRAP_OWNER_EMAIL
 // / _PASSWORD, and is a safe no-op on every subsequent run.
 func (s *Service) Bootstrap(ctx context.Context, email, password string) (*Owner, error) {
 	var count int

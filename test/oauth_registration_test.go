@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"baas/internal/testserver"
+	"maubase/internal/testserver"
 )
 
 // Scenarios: spec/oauth-client-registration.md

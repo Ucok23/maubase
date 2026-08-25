@@ -12,8 +12,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"baas/internal/audit"
-	"baas/internal/ownerauth"
+	"maubase/internal/audit"
+	"maubase/internal/ownerauth"
 )
 
 type ownerCtxKey string

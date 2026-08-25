@@ -1,5 +1,5 @@
 // Package restapi is the auto-generated REST layer: every table in the
-// database that isn't one of baas's own internal tables becomes a
+// database that isn't one of maubase's own internal tables becomes a
 // queryable/writable collection at /api/data/{table}, discovered by
 // introspecting the schema rather than through any separate config —
 // see the package's spec at spec/auto-rest.md for the exact behavior.
@@ -18,7 +18,7 @@ import (
 // scoped to the access token's subject automatically (see handlers.go).
 const OwnerColumnName = "owner_id"
 
-// reservedTables are baas's own tables (see internal/db/migrations) —
+// reservedTables are maubase's own tables (see internal/db/migrations) —
 // never exposed through auto-REST regardless of caller or token, so an
 // access token can never end up querying sessions or OAuth client secrets
 // through this layer.

@@ -6,7 +6,7 @@ import "time"
 // via the identity layer's session cookie (the plain HTTP API and the
 // OAuth authorization server's login/consent screens alike), so signing in
 // once on either surface signs you in on both.
-const SessionCookieName = "baas_session"
+const SessionCookieName = "maubase_session"
 
 type User struct {
 	ID        string

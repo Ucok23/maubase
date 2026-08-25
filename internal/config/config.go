@@ -27,7 +27,7 @@ type Config struct {
 	BootstrapOwnerPassword string
 
 	// MigrationsDir is where a deployment's own application-schema .sql
-	// files live (as opposed to baas's own embedded migrations). Missing
+	// files live (as opposed to maubase's own embedded migrations). Missing
 	// entirely is fine — see db.MigrateDir.
 	MigrationsDir string
 
@@ -53,17 +53,17 @@ type Config struct {
 
 func Load() Config {
 	return Config{
-		Addr:                   getEnv("BAAS_ADDR", ":8080"),
-		DBPath:                 getEnv("BAAS_DB_PATH", "data/baas.db"),
-		Issuer:                 getEnv("BAAS_ISSUER", "http://localhost:8080"),
-		BootstrapOwnerEmail:    getEnv("BAAS_BOOTSTRAP_OWNER_EMAIL", ""),
-		BootstrapOwnerPassword: getEnv("BAAS_BOOTSTRAP_OWNER_PASSWORD", ""),
-		MigrationsDir:          getEnv("BAAS_MIGRATIONS_DIR", "migrations"),
-		LoginRateLimit:         getEnvInt("BAAS_LOGIN_RATE_LIMIT", 10),
-		LoginRateWindow:        getEnvSeconds("BAAS_LOGIN_RATE_WINDOW_SECONDS", 60*time.Second),
-		SessionCleanupInterval: getEnvSeconds("BAAS_SESSION_CLEANUP_INTERVAL_SECONDS", time.Hour),
-		StorageDir:             getEnv("BAAS_STORAGE_DIR", "data/storage"),
-		MaxUploadBytes:         int64(getEnvInt("BAAS_MAX_UPLOAD_MB", 25)) * 1024 * 1024,
+		Addr:                   getEnv("MAUBASE_ADDR", ":8080"),
+		DBPath:                 getEnv("MAUBASE_DB_PATH", "data/maubase.db"),
+		Issuer:                 getEnv("MAUBASE_ISSUER", "http://localhost:8080"),
+		BootstrapOwnerEmail:    getEnv("MAUBASE_BOOTSTRAP_OWNER_EMAIL", ""),
+		BootstrapOwnerPassword: getEnv("MAUBASE_BOOTSTRAP_OWNER_PASSWORD", ""),
+		MigrationsDir:          getEnv("MAUBASE_MIGRATIONS_DIR", "migrations"),
+		LoginRateLimit:         getEnvInt("MAUBASE_LOGIN_RATE_LIMIT", 10),
+		LoginRateWindow:        getEnvSeconds("MAUBASE_LOGIN_RATE_WINDOW_SECONDS", 60*time.Second),
+		SessionCleanupInterval: getEnvSeconds("MAUBASE_SESSION_CLEANUP_INTERVAL_SECONDS", time.Hour),
+		StorageDir:             getEnv("MAUBASE_STORAGE_DIR", "data/storage"),
+		MaxUploadBytes:         int64(getEnvInt("MAUBASE_MAX_UPLOAD_MB", 25)) * 1024 * 1024,
 	}
 }
 
