@@ -1,19 +1,19 @@
 {{define "owners"}}{{template "header" .}}
-<h1>Owners</h1>
-{{if .Error}}<p style="color:var(--pico-del-color)">{{.Error}}</p>{{end}}
-<table>
+{{if .Error}}<div class="alert">{{.Error}}</div>{{end}}
+{{$root := .}}
+<div class="table-wrap">
+<table class="data-table">
 <thead><tr><th>Email</th><th>Role</th><th>Created</th><th></th></tr></thead>
 <tbody>
-{{$root := .}}
 {{range .Owners}}
 <tr>
-<td>{{.Email}}</td>
-<td>{{.Role}}</td>
+<td style="font-family:var(--font)">{{.Email}}</td>
+<td><span class="badge badge-{{.Role}}">{{.Role}}</span></td>
 <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
-<td>
+<td class="actions">
 {{if eq $root.Owner.Role "owner"}}
 <form method="POST" action="/admin/ui/owners/{{.ID}}/delete" onsubmit="return confirm('Delete {{.Email}}?')" style="margin:0">
-<button type="submit" class="secondary outline">Delete</button>
+<button type="submit" class="btn btn-danger btn-sm">Delete</button>
 </form>
 {{end}}
 </td>
@@ -21,21 +21,23 @@
 {{end}}
 </tbody>
 </table>
+</div>
 
 {{if eq .Owner.Role "owner"}}
 <h2>Add an owner</h2>
-<form method="POST" action="/admin/ui/owners">
-<label>Email<input type="email" name="email" required></label>
-<label>Password<input type="password" name="password" required></label>
-<label>Role
+<form method="POST" action="/admin/ui/owners" class="form-card">
+<div class="field"><label>Email</label><input type="email" name="email" required></div>
+<div class="field"><label>Password</label><input type="password" name="password" required></div>
+<div class="field">
+<label>Role</label>
 <select name="role">
 <option value="viewer">viewer</option>
 <option value="developer">developer</option>
 <option value="admin">admin</option>
 <option value="owner">owner</option>
 </select>
-</label>
-<button type="submit">Create</button>
+</div>
+<button type="submit" class="btn btn-primary">Create owner</button>
 </form>
 {{end}}
 {{template "footer" .}}{{end}}

@@ -1,33 +1,48 @@
+{{define "navicon"}}{{if eq . "dashboard"}}<svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.5" y="2.5" width="6.5" height="6.5" rx="1.2"/><rect x="11" y="2.5" width="6.5" height="6.5" rx="1.2"/><rect x="2.5" y="11" width="6.5" height="6.5" rx="1.2"/><rect x="11" y="11" width="6.5" height="6.5" rx="1.2"/></svg>
+{{else if eq . "data"}}<svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="10" cy="4.5" rx="6.5" ry="2.3"/><path d="M3.5 4.5v11c0 1.27 2.9 2.3 6.5 2.3s6.5-1.03 6.5-2.3v-11"/><path d="M3.5 10c0 1.27 2.9 2.3 6.5 2.3s6.5-1.03 6.5-2.3"/></svg>
+{{else if eq . "owners"}}<svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="6.5" r="2.8"/><path d="M2 17c0-3 2.2-5 5-5s5 2 5 5"/><circle cx="14.5" cy="7" r="2.2"/><path d="M13 12.2c2.2.3 3.7 2 3.7 4.8"/></svg>
+{{else if eq . "audit-log"}}<svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10.5" r="7"/><path d="M10 6.5v4l2.6 1.6"/><path d="M7 2.2h6"/></svg>
+{{else if eq . "maintenance"}}<svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12.4 3.3a3.6 3.6 0 0 0-4.6 4.4L3 12.5V17h4.5l4.8-4.8a3.6 3.6 0 0 0 4.4-4.6l-2.5 2.5-2-2 2.5-2.5Z"/></svg>
+{{end}}{{end}}
+
 {{define "header"}}<!doctype html>
-<html data-theme="light">
+<html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}} · maubase admin</title>
-<link rel="stylesheet" href="/admin/ui/static/pico.min.css">
+<link rel="stylesheet" href="/admin/ui/static/admin.css">
 <script src="/admin/ui/static/htmx.min.js"></script>
 </head>
 <body>
-<nav class="container-fluid">
-<ul><li><strong>maubase admin</strong></li></ul>
-<ul>
-<li><a href="/admin/ui">Dashboard</a></li>
-<li><a href="/admin/ui/data">Data</a></li>
-<li><a href="/admin/ui/owners">Owners</a></li>
-<li><a href="/admin/ui/audit-log">Audit log</a></li>
-<li><a href="/admin/ui/maintenance">Maintenance</a></li>
-</ul>
-<ul>
-{{if .Owner}}
-<li>{{.Owner.Email}} ({{.Owner.Role}})</li>
-<li><form method="POST" action="/admin/ui/logout" style="margin:0"><button type="submit" class="secondary outline">Log out</button></form></li>
-{{end}}
-</ul>
+<div class="shell">
+<aside class="sidebar">
+<div class="sidebar-brand">maubase<span class="dot">•</span>admin</div>
+<nav class="sidebar-nav">
+<a href="/admin/ui" class="nav-item {{if eq .Nav "dashboard"}}active{{end}}">{{template "navicon" "dashboard"}}Dashboard</a>
+<a href="/admin/ui/data" class="nav-item {{if eq .Nav "data"}}active{{end}}">{{template "navicon" "data"}}Data</a>
+<a href="/admin/ui/owners" class="nav-item {{if eq .Nav "owners"}}active{{end}}">{{template "navicon" "owners"}}Owners</a>
+<a href="/admin/ui/audit-log" class="nav-item {{if eq .Nav "audit-log"}}active{{end}}">{{template "navicon" "audit-log"}}Audit log</a>
+<a href="/admin/ui/maintenance" class="nav-item {{if eq .Nav "maintenance"}}active{{end}}">{{template "navicon" "maintenance"}}Maintenance</a>
 </nav>
-<main class="container">
+{{if .Owner}}
+<div class="sidebar-footer">
+<div class="user-chip">
+<span class="email">{{.Owner.Email}}</span>
+<span class="badge badge-{{.Owner.Role}}">{{.Owner.Role}}</span>
+</div>
+<form method="POST" action="/admin/ui/logout"><button type="submit" class="btn btn-ghost">Log out</button></form>
+</div>
+{{end}}
+</aside>
+<div class="content">
+<header class="content-header"><h1>{{.Title}}</h1></header>
+<div class="content-body">
 {{end}}
 
-{{define "footer"}}</main>
+{{define "footer"}}</div>
+</div>
+</div>
 </body>
 </html>
 {{end}}

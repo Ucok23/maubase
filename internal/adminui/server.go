@@ -4,9 +4,10 @@
 // /admin/audit-log, /admin/maintenance) already enforce — this is a
 // second, browser-friendly surface over that same plane, not a new
 // authorization model. No JS build step: html/template plus a vendored
-// htmx.js/pico.min.css, both go:embed'd — the same "deliberately plain,
-// no asset pipeline" approach internal/oauth/templates.go's login/consent
-// screens already take. See spec/admin-ui.md.
+// htmx.js and a hand-written admin.css, both go:embed'd — the same "no
+// asset pipeline" approach internal/oauth/templates.go's login/consent
+// screens already take, just with a real design pass on top instead of
+// bare unstyled HTML. See spec/admin-ui.md.
 package adminui
 
 import (
@@ -140,7 +141,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	render(w, "dashboard", map[string]any{"Title": "Dashboard", "Owner": ownerFromContext(r.Context())})
+	render(w, "dashboard", map[string]any{"Title": "Dashboard", "Nav": "dashboard", "Owner": ownerFromContext(r.Context())})
 }
 
 // --- owners -------------------------------------------------------------
@@ -151,7 +152,7 @@ func (s *Server) handleOwnersPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	render(w, "owners", map[string]any{"Title": "Owners", "Owner": ownerFromContext(r.Context()), "Owners": owners})
+	render(w, "owners", map[string]any{"Title": "Owners", "Nav": "owners", "Owner": ownerFromContext(r.Context()), "Owners": owners})
 }
 
 func (s *Server) handleCreateOwner(w http.ResponseWriter, r *http.Request) {
@@ -186,7 +187,7 @@ func (s *Server) handleDeleteOwner(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) renderOwnersWithError(w http.ResponseWriter, r *http.Request, actor *ownerauth.Owner, err error) {
 	owners, _ := s.ownerAuth.ListOwners(r.Context())
-	render(w, "owners", map[string]any{"Title": "Owners", "Owner": actor, "Owners": owners, "Error": err.Error()})
+	render(w, "owners", map[string]any{"Title": "Owners", "Nav": "owners", "Owner": actor, "Owners": owners, "Error": err.Error()})
 }
 
 // --- audit log ------------------------------------------------------------
@@ -199,7 +200,7 @@ func (s *Server) handleAuditLogPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render(w, "audit_log", map[string]any{
-		"Title": "Audit log", "Owner": ownerFromContext(r.Context()),
+		"Title": "Audit log", "Nav": "audit-log", "Owner": ownerFromContext(r.Context()),
 		"Entries": entries, "Limit": limit, "Offset": offset,
 	})
 }
@@ -207,7 +208,7 @@ func (s *Server) handleAuditLogPage(w http.ResponseWriter, r *http.Request) {
 // --- maintenance ------------------------------------------------------------
 
 func (s *Server) handleMaintenancePage(w http.ResponseWriter, r *http.Request) {
-	render(w, "maintenance", map[string]any{"Title": "Maintenance", "Owner": ownerFromContext(r.Context())})
+	render(w, "maintenance", map[string]any{"Title": "Maintenance", "Nav": "maintenance", "Owner": ownerFromContext(r.Context())})
 }
 
 // handlePurgeSessions mirrors internal/server's JSON
@@ -231,7 +232,7 @@ func (s *Server) handlePurgeSessions(w http.ResponseWriter, r *http.Request) {
 		"sessions": sessionsPurged, "owner_sessions": ownerSessionsPurged,
 	})
 	render(w, "maintenance", map[string]any{
-		"Title": "Maintenance", "Owner": owner, "Purged": true,
+		"Title": "Maintenance", "Nav": "maintenance", "Owner": owner, "Purged": true,
 		"SessionsPurged": sessionsPurged, "OwnerSessionsPurged": ownerSessionsPurged,
 	})
 }
@@ -240,7 +241,7 @@ func (s *Server) handlePurgeSessions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDataCollections(w http.ResponseWriter, r *http.Request) {
 	render(w, "data_collections", map[string]any{
-		"Title": "Data", "Owner": ownerFromContext(r.Context()), "Collections": s.restapi.AdminCollections(),
+		"Title": "Data", "Nav": "data", "Owner": ownerFromContext(r.Context()), "Collections": s.restapi.AdminCollections(),
 	})
 }
 
@@ -263,7 +264,7 @@ func (s *Server) handleDataRows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render(w, "data_rows", map[string]any{
-		"Title": col.Name, "Owner": owner, "Collection": col,
+		"Title": col.Name, "Nav": "data", "Owner": owner, "Collection": col,
 		"Rows": rows, "Limit": limit, "Offset": offset, "Total": total,
 		"CanWrite": owner.Role.AtLeast(ownerauth.RoleDeveloper),
 	})
@@ -299,7 +300,7 @@ func (s *Server) handleDataEditForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render(w, "data_row_edit", map[string]any{
-		"Title": "Edit " + col.Name, "Owner": ownerFromContext(r.Context()), "Collection": col, "Row": row,
+		"Title": "Edit " + col.Name, "Nav": "data", "Owner": ownerFromContext(r.Context()), "Collection": col, "Row": row,
 	})
 }
 

@@ -1,8 +1,9 @@
 {{define "data_rows"}}{{template "header" .}}
-<h1>{{.Collection.Name}}</h1>
-<p><a href="/admin/ui/data">&larr; all collections</a> · every row, regardless of owner (spec/admin-ui.md ADMINUI-12) · {{.Total}} total</p>
-<div style="overflow-x:auto">
-<table>
+<p class="meta-line"><a href="/admin/ui/data">← all collections</a> · every row, regardless of owner · {{.Total}} total</p>
+
+{{if .Rows}}
+<div class="table-wrap">
+<table class="data-table">
 <thead><tr>
 {{range .Collection.Columns}}<th>{{.Name}}</th>{{end}}
 {{if .CanWrite}}<th></th>{{end}}
@@ -12,14 +13,14 @@
 {{range .Rows}}
 {{$row := .}}
 <tr id="row-{{index $row $root.Collection.PKColumn}}">
-{{range $root.Collection.Columns}}<td>{{index $row .Name}}</td>{{end}}
+{{range $root.Collection.Columns}}<td{{if .IsPK}} class="id-cell"{{end}}>{{index $row .Name}}</td>{{end}}
 {{if $root.CanWrite}}
-<td style="white-space:nowrap">
-<a href="/admin/ui/data/{{$root.Collection.Name}}/{{index $row $root.Collection.PKColumn}}/edit">Edit</a>
+<td class="actions">
+<a href="/admin/ui/data/{{$root.Collection.Name}}/{{index $row $root.Collection.PKColumn}}/edit" class="btn btn-outline btn-sm">Edit</a>
 <form hx-post="/admin/ui/data/{{$root.Collection.Name}}/{{index $row $root.Collection.PKColumn}}/delete"
       hx-target="#row-{{index $row $root.Collection.PKColumn}}" hx-swap="outerHTML" hx-confirm="Delete this row?"
       style="display:inline">
-<button type="submit" class="secondary outline">Delete</button>
+<button type="submit" class="btn btn-danger btn-sm">Delete</button>
 </form>
 </td>
 {{end}}
@@ -28,21 +29,22 @@
 </tbody>
 </table>
 </div>
-{{if not .Rows}}<p>No rows yet.</p>{{end}}
-<nav>
-<ul>
-{{if gt .Offset 0}}<li><a href="?limit={{.Limit}}&offset={{sub .Offset .Limit}}">&larr; Newer</a></li>{{end}}
-{{if lt (add .Offset .Limit) .Total}}<li><a href="?limit={{.Limit}}&offset={{add .Offset .Limit}}">Older &rarr;</a></li>{{end}}
-</ul>
+{{else}}
+<div class="empty-state">No rows yet.</div>
+{{end}}
+
+<nav class="pagination">
+{{if gt .Offset 0}}<a class="btn btn-outline btn-sm" href="?limit={{.Limit}}&offset={{sub .Offset .Limit}}">← Newer</a>{{end}}
+{{if lt (add .Offset .Limit) .Total}}<a class="btn btn-outline btn-sm" href="?limit={{.Limit}}&offset={{add .Offset .Limit}}">Older →</a>{{end}}
 </nav>
 
 {{if .CanWrite}}
 <h2>Create row</h2>
-<form method="POST" action="/admin/ui/data/{{.Collection.Name}}">
+<form method="POST" action="/admin/ui/data/{{.Collection.Name}}" class="form-card">
 {{range .Collection.Columns}}
-{{if not .IsPK}}<label>{{.Name}}<input type="text" name="{{.Name}}"></label>{{end}}
+{{if not .IsPK}}<div class="field"><label>{{.Name}}</label><input type="text" name="{{.Name}}"></div>{{end}}
 {{end}}
-<button type="submit">Create</button>
+<button type="submit" class="btn btn-primary">Create</button>
 </form>
 {{end}}
 {{template "footer" .}}{{end}}

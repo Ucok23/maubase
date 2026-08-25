@@ -1,21 +1,24 @@
 {{define "login"}}<!doctype html>
-<html data-theme="light">
+<html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sign in · maubase admin</title>
-<link rel="stylesheet" href="/admin/ui/static/pico.min.css">
+<link rel="stylesheet" href="/admin/ui/static/admin.css">
 </head>
 <body>
-<main class="container" style="max-width:400px;margin-top:4rem">
-<h1>maubase admin</h1>
-{{if .Error}}<p style="color:var(--pico-del-color)">{{.Error}}</p>{{end}}
+<div class="login-shell">
+<div class="login-card">
+<h1>maubase<span style="color:var(--accent)">•</span>admin</h1>
+<p class="sub">Sign in with your owner-plane account</p>
+{{if .Error}}<div class="alert">{{.Error}}</div>{{end}}
 <form method="POST" action="/admin/ui/login">
-<label>Email<input type="email" name="email" value="{{.Email}}" required autofocus></label>
-<label>Password<input type="password" name="password" required></label>
-<button type="submit">Sign in</button>
+<div class="field"><label>Email</label><input type="email" name="email" value="{{.Email}}" required autofocus></div>
+<div class="field"><label>Password</label><input type="password" name="password" required></div>
+<button type="submit" class="btn btn-primary">Sign in</button>
 </form>
-</main>
+</div>
+</div>
 </body>
 </html>
 {{end}}
