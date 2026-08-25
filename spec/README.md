@@ -16,6 +16,7 @@ comment so a failing test points back to the exact sentence it's checking,
 and so a spec change makes it easy to find what needs re-verifying.
 
 - [identity.md](identity.md) — sign up, sign in, sessions (customer plane)
+- [password-reset.md](password-reset.md) — forgot/reset password (customer plane)
 - [owner-plane.md](owner-plane.md) — the team running this deployment (owner plane)
 - [auto-rest.md](auto-rest.md) — tables become an API automatically
 - [storage.md](storage.md) — file upload/download

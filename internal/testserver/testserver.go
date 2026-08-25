@@ -17,6 +17,7 @@ import (
 	"maubase/internal/audit"
 	"maubase/internal/auth"
 	"maubase/internal/db"
+	"maubase/internal/email"
 	"maubase/internal/oauth"
 	"maubase/internal/ownerauth"
 	"maubase/internal/realtime"
@@ -53,6 +54,17 @@ type Options struct {
 	// internal/storage). Zero means "use the same 25MB default as
 	// config.Load".
 	MaxUploadBytes int64
+
+	// EmailSender backs POST /api/auth/forgot-password. Nil defaults to
+	// a fresh email.NewFakeSender() — a test that wants to inspect what
+	// was "sent" (the reset link, notably) should construct its own
+	// *email.FakeSender, pass it here, and keep the pointer to call
+	// .Sent() on later.
+	EmailSender email.Sender
+	// PasswordResetURL defaults to a placeholder frontend URL if empty —
+	// only the tests actually asserting on the emailed link's shape need
+	// to set this themselves.
+	PasswordResetURL string
 }
 
 // New starts a server on an ephemeral local port and returns its base URL
@@ -176,7 +188,16 @@ func newCustom(t *testing.T, opts Options) (string, error) {
 
 	adminuiSvc := adminui.NewServer(sqlDB, authSvc, ownerSvc, restapiSvc, storageSvc, oauthSvc, auditLog)
 
-	httpSrv := &http.Server{Handler: server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, adminuiSvc, auditLog, opts.LoginRateLimit, opts.LoginRateWindow)}
+	emailSender := opts.EmailSender
+	if emailSender == nil {
+		emailSender = email.NewFakeSender()
+	}
+	passwordResetURL := opts.PasswordResetURL
+	if passwordResetURL == "" {
+		passwordResetURL = "http://localhost:3000/reset-password"
+	}
+
+	httpSrv := &http.Server{Handler: server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, adminuiSvc, auditLog, opts.LoginRateLimit, opts.LoginRateWindow, emailSender, passwordResetURL)}
 	go httpSrv.Serve(lis) //nolint:errcheck // Serve always returns non-nil; Close() below triggers it deliberately
 	t.Cleanup(func() { httpSrv.Close() })
 

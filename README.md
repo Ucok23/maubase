@@ -265,6 +265,25 @@ Config via env vars (see `internal/config`):
   are written, one file per upload
 - `MAUBASE_MAX_UPLOAD_MB` (default `25`) — largest single file upload
   accepted; a bigger request body is rejected before it's fully read
+- `MAUBASE_RESEND_API_KEY` / `MAUBASE_EMAIL_FROM` / `MAUBASE_PASSWORD_RESET_URL`
+  — password reset (see below); all three unset is a valid, common state
+  (a deployment that never uses it doesn't need any of them) and gets
+  `internal/email.NoopSender`, which fails loudly the first time
+  something actually tries to send rather than silently dropping the
+  email
+
+## Password reset
+
+`POST /api/auth/forgot-password` (`{"email": "..."}`, always `204`,
+whether or not that email is registered — never revealing which) emails a
+reset link built from `MAUBASE_PASSWORD_RESET_URL` (your own frontend's
+page, not something maubase renders) with a one-hour, single-use token
+appended as `?token=`. `POST /api/auth/reset-password`
+(`{"token": "...", "password": "..."}`) redeems it: sets the new
+password and signs the account out everywhere, including whatever
+session requested the reset. Delivery is via `internal/email.Sender` —
+Resend (`internal/email.ResendSender`) when both `MAUBASE_RESEND_API_KEY`
+and `MAUBASE_EMAIL_FROM` are set. See `spec/password-reset.md`.
 
 ## Testing
 
