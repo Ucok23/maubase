@@ -2,7 +2,10 @@
 package server
 
 import (
+	"net"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -11,6 +14,7 @@ import (
 	"baas/internal/auth"
 	"baas/internal/oauth"
 	"baas/internal/ownerauth"
+	"baas/internal/ratelimit"
 	"baas/internal/restapi"
 )
 
@@ -21,10 +25,19 @@ type Server struct {
 	restapi   *restapi.Server
 	audit     *audit.Log
 	router    chi.Router
+
+	loginLimiter *ratelimit.Limiter
 }
 
-func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.Service, restapiSvc *restapi.Server, auditLog *audit.Log) *Server {
-	s := &Server{auth: authSvc, oauth: oauthSvc, ownerAuth: ownerAuthSvc, restapi: restapiSvc, audit: auditLog}
+// New wires the full HTTP API. loginRateLimit/Window configure the
+// throttle on the login endpoints (see internal/ratelimit); pass 0 for
+// loginRateLimit to disable it (unlimited attempts) — useful for tests
+// that aren't exercising rate-limiting and don't want to think about it.
+func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.Service, restapiSvc *restapi.Server, auditLog *audit.Log, loginRateLimit int, loginRateWindow time.Duration) *Server {
+	s := &Server{
+		auth: authSvc, oauth: oauthSvc, ownerAuth: ownerAuthSvc, restapi: restapiSvc, audit: auditLog,
+		loginLimiter: ratelimit.New(loginRateLimit, loginRateWindow),
+	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -34,7 +47,7 @@ func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.
 
 	r.Route("/api/auth", func(r chi.Router) {
 		r.Post("/signup", s.handleSignUp)
-		r.Post("/login", s.handleLogin)
+		r.With(s.rateLimitLogin).Post("/login", s.handleLogin)
 		r.Post("/logout", s.handleLogout)
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAuth)
@@ -69,7 +82,7 @@ func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.
 	// cookie/session/table from the customer plane above and the OAuth
 	// layer — see internal/ownerauth's package doc.
 	r.Route("/admin/auth", func(r chi.Router) {
-		r.Post("/login", s.handleOwnerLogin)
+		r.With(s.rateLimitLogin).Post("/login", s.handleOwnerLogin)
 		r.Post("/logout", s.handleOwnerLogout)
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireOwnerRole(ownerauth.RoleViewer))
@@ -89,6 +102,10 @@ func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.
 		r.Use(s.requireOwnerRole(ownerauth.RoleAdmin))
 		r.Get("/", s.handleListAuditLog)
 	})
+	r.Route("/admin/maintenance", func(r chi.Router) {
+		r.Use(s.requireOwnerRole(ownerauth.RoleAdmin))
+		r.Post("/purge-sessions", s.handlePurgeSessions)
+	})
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -101,4 +118,37 @@ func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.router.ServeHTTP(w, r)
+}
+
+// rateLimitLogin throttles a login endpoint per client IP (see
+// internal/ratelimit), regardless of whether the attempt succeeds — the
+// point is bounding brute-force guessing, not just repeated failures. A
+// loginLimiter with Limit <= 0 (server built with loginRateLimit 0) is
+// treated as disabled, since ratelimit.Limiter itself has no "unlimited"
+// mode.
+func (s *Server) rateLimitLogin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.loginLimiter.Limit <= 0 {
+			next.ServeHTTP(w, r)
+			return
+		}
+		key := clientIP(r)
+		if ok, retryAfter := s.loginLimiter.Allow(key); !ok {
+			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())+1))
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many login attempts"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// clientIP extracts the caller's address from r.RemoteAddr, which
+// middleware.RealIP (registered above) has already normalized from
+// X-Forwarded-For/X-Real-IP when present.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }

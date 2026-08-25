@@ -68,13 +68,15 @@ func run() error {
 
 	auditLog := audit.New(sqlDB)
 
-	srv := server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, auditLog)
+	srv := server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, auditLog, cfg.LoginRateLimit, cfg.LoginRateWindow)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           srv,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+
+	go runSessionJanitor(ctx, authSvc, ownerSvc, cfg.SessionCleanupInterval)
 
 	go func() {
 		<-ctx.Done()
@@ -91,6 +93,34 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+// runSessionJanitor periodically purges expired rows from the customer-
+// and owner-plane session tables (see auth.Service/ownerauth.Service's
+// PurgeExpiredSessions) until ctx is canceled. Expired sessions already
+// fail validation on their own, so a missed or slow tick is harmless —
+// this is storage hygiene, not a correctness requirement. Also reachable
+// on demand via POST /admin/maintenance/purge-sessions.
+func runSessionJanitor(ctx context.Context, authSvc *auth.Service, ownerSvc *ownerauth.Service, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if n, err := authSvc.PurgeExpiredSessions(ctx); err != nil {
+				log.Printf("session janitor: purge sessions: %v", err)
+			} else if n > 0 {
+				log.Printf("session janitor: purged %d expired session(s)", n)
+			}
+			if n, err := ownerSvc.PurgeExpiredSessions(ctx); err != nil {
+				log.Printf("session janitor: purge owner sessions: %v", err)
+			} else if n > 0 {
+				log.Printf("session janitor: purged %d expired owner session(s)", n)
+			}
+		}
+	}
 }
 
 // bootstrapOwner creates the first owner-plane account from

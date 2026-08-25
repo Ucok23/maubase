@@ -141,6 +141,20 @@ func (s *Service) DeleteUser(ctx context.Context, id string) error {
 	return nil
 }
 
+// PurgeExpiredSessions deletes every session row whose expires_at has
+// already passed, and reports how many were removed. Expired sessions
+// already fail ValidateSession, so this is purely storage hygiene (a
+// long-lived deployment would otherwise accumulate one dead row per
+// login forever) — not something that changes any externally observable
+// behavior. Safe to call from a periodic background job or on demand.
+func (s *Service) PurgeExpiredSessions(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at <= ?`, time.Now())
+	if err != nil {
+		return 0, fmt.Errorf("purge expired sessions: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 func (s *Service) createSession(ctx context.Context, userID string) (*Session, error) {
 	rawToken, err := randomToken(32)
 	if err != nil {

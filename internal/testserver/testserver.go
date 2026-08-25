@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"baas/internal/audit"
 	"baas/internal/auth"
@@ -36,6 +37,14 @@ type Options struct {
 	// against, standing in for what a deployment's migrations/ directory
 	// would normally provide.
 	Schema []string
+
+	// LoginRateLimit/Window configure the login-endpoint throttle (see
+	// internal/ratelimit and spec/maintenance.md). Zero value
+	// (LoginRateLimit 0) disables it, which is what every Options{} not
+	// specifically testing rate-limiting gets — otherwise every test that
+	// logs in more than a handful of times would need to think about it.
+	LoginRateLimit  int
+	LoginRateWindow time.Duration
 }
 
 // New starts a server on an ephemeral local port and returns its base URL
@@ -58,6 +67,13 @@ func NewWithOwner(t *testing.T, email, password string) string {
 func NewWithSchema(t *testing.T, schema ...string) string {
 	t.Helper()
 	return NewCustom(t, Options{Schema: schema})
+}
+
+// NewWithLoginRateLimit is New, plus the login-endpoint throttle enabled
+// at the given limit/window (see Options.LoginRateLimit).
+func NewWithLoginRateLimit(t *testing.T, limit int, window time.Duration) string {
+	t.Helper()
+	return NewCustom(t, Options{LoginRateLimit: limit, LoginRateWindow: window})
 }
 
 // NewCustom is the general form; New/NewWithOwner/NewWithSchema are thin
@@ -111,7 +127,7 @@ func NewCustom(t *testing.T, opts Options) string {
 
 	auditLog := audit.New(sqlDB)
 
-	httpSrv := &http.Server{Handler: server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, auditLog)}
+	httpSrv := &http.Server{Handler: server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, auditLog, opts.LoginRateLimit, opts.LoginRateWindow)}
 	go httpSrv.Serve(lis) //nolint:errcheck // Serve always returns non-nil; Close() below triggers it deliberately
 	t.Cleanup(func() { httpSrv.Close() })
 

@@ -2,7 +2,11 @@
 // with sane defaults for local/single-VPS deployment.
 package config
 
-import "os"
+import (
+	"os"
+	"strconv"
+	"time"
+)
 
 type Config struct {
 	// Addr is the HTTP listen address, e.g. ":8080".
@@ -26,6 +30,17 @@ type Config struct {
 	// files live (as opposed to baas's own embedded migrations). Missing
 	// entirely is fine — see db.MigrateDir.
 	MigrationsDir string
+
+	// LoginRateLimit/Window throttle POST /api/auth/login and
+	// POST /admin/auth/login: at most LoginRateLimit attempts (successful
+	// or not) per client IP per LoginRateWindow. See internal/ratelimit.
+	LoginRateLimit  int
+	LoginRateWindow time.Duration
+
+	// SessionCleanupInterval is how often the background janitor purges
+	// expired rows from the sessions/owner_sessions tables. See
+	// auth.Service.PurgeExpiredSessions.
+	SessionCleanupInterval time.Duration
 }
 
 func Load() Config {
@@ -36,6 +51,9 @@ func Load() Config {
 		BootstrapOwnerEmail:    getEnv("BAAS_BOOTSTRAP_OWNER_EMAIL", ""),
 		BootstrapOwnerPassword: getEnv("BAAS_BOOTSTRAP_OWNER_PASSWORD", ""),
 		MigrationsDir:          getEnv("BAAS_MIGRATIONS_DIR", "migrations"),
+		LoginRateLimit:         getEnvInt("BAAS_LOGIN_RATE_LIMIT", 10),
+		LoginRateWindow:        getEnvSeconds("BAAS_LOGIN_RATE_WINDOW_SECONDS", 60*time.Second),
+		SessionCleanupInterval: getEnvSeconds("BAAS_SESSION_CLEANUP_INTERVAL_SECONDS", time.Hour),
 	}
 }
 
@@ -44,4 +62,24 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func getEnvSeconds(key string, fallback time.Duration) time.Duration {
+	n := getEnvInt(key, -1)
+	if n < 0 {
+		return fallback
+	}
+	return time.Duration(n) * time.Second
 }
