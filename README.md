@@ -280,6 +280,16 @@ make test
 When behavior needs to change, update the spec first, then the code, then
 watch the test go from red to green — not the other way around.
 
+[`e2e/`](e2e/) is a separate, small Playwright suite that drives the
+embedded admin UI in a real browser and builds a storyboard report —
+screenshots per step plus a video, all in one self-contained HTML file —
+since that's the one surface here with an actual UI to look at; `test/`
+never opens a browser. See `e2e/README.md`.
+
+```sh
+make e2e   # then open e2e/report/index.html
+```
+
 ## Try the auth flow
 
 ```sh
