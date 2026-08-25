@@ -18,6 +18,10 @@ export default defineConfig({
   reporter: [
     ['list'],
     ['html', { outputFolder: 'playwright-report', open: 'never' }],
+    // scripts/build-report.mjs reads this to build the storyboard report
+    // (step titles, durations, status, video path) instead of any of that
+    // being hand-typed — see `npm run report:build`.
+    ['json', { outputFile: 'report.json' }],
   ],
   outputDir: 'test-results',
   use: {

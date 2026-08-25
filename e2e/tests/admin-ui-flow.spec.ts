@@ -11,7 +11,11 @@ import path from 'node:path';
 const OWNER_EMAIL = process.env.MAUBASE_BOOTSTRAP_OWNER_EMAIL ?? 'owner@e2e.test';
 const OWNER_PASSWORD = process.env.MAUBASE_BOOTSTRAP_OWNER_PASSWORD ?? 'e2e-password-123';
 
-const SHOTS_DIR = path.join(__dirname, '..', 'screenshots');
+// Namespaced by this file's own basename (e.g. screenshots/admin-ui-flow/)
+// so a second spec file can't clobber this one's numbering — and so
+// scripts/build-report.mjs can find the right screenshots for a given
+// spec purely from report.json's suite.file, no hardcoded path needed.
+const SHOTS_DIR = path.join(__dirname, '..', 'screenshots', path.basename(__filename).replace(/\.spec\.ts$/, ''));
 fs.rmSync(SHOTS_DIR, { recursive: true, force: true });
 fs.mkdirSync(SHOTS_DIR, { recursive: true });
 

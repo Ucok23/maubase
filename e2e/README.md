@@ -37,29 +37,55 @@ docker run --rm -v "$(pwd)/..":/work -w /work/e2e \
 
 ## Running it
 
+One command from the repo root, safe to run from a fresh checkout (or a
+fresh agent with no local state — installs are cheap no-ops once cached):
+
 ```bash
-cd e2e
-npm install
-npx playwright install chromium   # first run only; ~300MB, cached afterward
-npm test
+make e2e
 ```
 
-`npm test` builds `maubase` from the repo root and runs it against a
-throwaway SQLite DB in `.data/` on port 8811 (see `run-server.sh` and
+That's `npm install && npx playwright install chromium && npm run
+test:report` — see the `e2e` target in the root `Makefile`. Equivalently,
+from inside `e2e/`:
+
+```bash
+npm install
+npx playwright install chromium   # first run only; ~300MB, cached afterward
+npm run test:report                # runs the suite, then builds report/index.html
+```
+
+This builds `maubase` from the repo root and runs it against a throwaway
+SQLite DB in `.data/` on port 8811 (see `run-server.sh` and
 `playwright.config.ts`'s `webServer` block) — it never touches `data/` or
 any real deployment. The bootstrap owner is `owner@e2e.test` /
 `e2e-password-123` by default; override via the same
 `MAUBASE_BOOTSTRAP_OWNER_EMAIL`/`_PASSWORD` env vars the server itself
 reads.
 
+Just the tests, no report (e.g. while iterating on a spec file):
+`npm test`. Just rebuilding the report from the last run's output, no
+retest: `npm run report:build`.
+
 ## Where the output goes
 
-- `screenshots/01-login.png` … `10-logged-out.png` — one per `test.step`,
-  overwritten fresh on every run.
-- `test-results/**/video.webm` — the full recording (`use.video: 'on'` in
-  the config, so this is captured on every run, not just failures).
-- `npm run report` opens the HTML report, which links both of the above
-  plus a trace viewer for the run.
+- **`report/index.html`** — the one file to open: every `test.step()`
+  narrated with its own screenshot, the full session video, status and
+  timing, all self-contained (screenshots and video inlined as data URIs,
+  fonts from Google Fonts, no other external requests) — open it directly
+  in a browser, no server needed. Built by `scripts/build-report.mjs`
+  entirely from `report.json` (Playwright's own `json` reporter output —
+  step titles, durations, pass/fail, the video's attachment path) and
+  `screenshots/<spec-name>/*.png`; nothing in it is hand-typed, so it
+  stays accurate as the test itself changes, and a second spec file
+  picked up automatically gets its own section.
+- `screenshots/<spec-name>/01-*.png` … — one per `test.step`, namespaced
+  by spec file so a second spec can't collide with this one's numbering.
+- `test-results/**/video.webm` — the raw recording report/index.html
+  embeds (`use.video: 'on'` in the config, captured on every run, not
+  just failures).
+- `npm run report` opens Playwright's own HTML report (distinct from
+  `report/index.html` above), which adds a trace viewer for debugging a
+  failure.
 
-All three are gitignored — regenerate them by running the suite, don't
-expect them to already be present after a fresh checkout.
+All of the above are gitignored — regenerate them by running the suite,
+don't expect them to already be present after a fresh checkout.
