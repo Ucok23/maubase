@@ -21,6 +21,7 @@ import (
 	"baas/internal/ownerauth"
 	"baas/internal/restapi"
 	"baas/internal/server"
+	"baas/internal/storage"
 )
 
 func main() {
@@ -66,9 +67,15 @@ func run() error {
 	}
 	restapiSvc := restapi.NewServer(sqlDB, registry, oauthSvc)
 
+	storageBackend, err := storage.NewLocalBackend(cfg.StorageDir)
+	if err != nil {
+		return fmt.Errorf("init storage backend: %w", err)
+	}
+	storageSvc := storage.NewServer(sqlDB, storageBackend, oauthSvc, cfg.MaxUploadBytes)
+
 	auditLog := audit.New(sqlDB)
 
-	srv := server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, auditLog, cfg.LoginRateLimit, cfg.LoginRateWindow)
+	srv := server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, auditLog, cfg.LoginRateLimit, cfg.LoginRateWindow)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,

@@ -41,6 +41,14 @@ type Config struct {
 	// expired rows from the sessions/owner_sessions tables. See
 	// auth.Service.PurgeExpiredSessions.
 	SessionCleanupInterval time.Duration
+
+	// StorageDir is where uploaded file bytes are written, one file per
+	// upload named by its id. See internal/storage.LocalBackend.
+	StorageDir string
+
+	// MaxUploadBytes caps a single file upload's size; a larger request
+	// body is rejected before it's fully read. See internal/storage.
+	MaxUploadBytes int64
 }
 
 func Load() Config {
@@ -54,6 +62,8 @@ func Load() Config {
 		LoginRateLimit:         getEnvInt("BAAS_LOGIN_RATE_LIMIT", 10),
 		LoginRateWindow:        getEnvSeconds("BAAS_LOGIN_RATE_WINDOW_SECONDS", 60*time.Second),
 		SessionCleanupInterval: getEnvSeconds("BAAS_SESSION_CLEANUP_INTERVAL_SECONDS", time.Hour),
+		StorageDir:             getEnv("BAAS_STORAGE_DIR", "data/storage"),
+		MaxUploadBytes:         int64(getEnvInt("BAAS_MAX_UPLOAD_MB", 25)) * 1024 * 1024,
 	}
 }
 

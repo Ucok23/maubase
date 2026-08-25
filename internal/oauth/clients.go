@@ -31,7 +31,7 @@ func (c dbClient) toFosite() *fosite.DefaultClient {
 // Dynamic client registration (register.go) rejects any scope outside this
 // list; the consent screen (handlers.go) only ever offers these. Extend it
 // as real resources (auto-REST tables, etc.) get scopes of their own.
-var AllowedScopes = []string{"profile", "records:read", "records:write", "offline_access"}
+var AllowedScopes = []string{"profile", "records:read", "records:write", "files:read", "files:write", "offline_access"}
 
 func isAllowedScope(scope string) bool {
 	for _, s := range AllowedScopes {

@@ -1,4 +1,5 @@
 /data/*.db
 /data/*.db-shm
 /data/*.db-wal
+/data/storage/
 /bin/
