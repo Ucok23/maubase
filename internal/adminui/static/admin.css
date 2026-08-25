@@ -269,6 +269,13 @@ table.data-table { width: 100%; border-collapse: collapse; font-size: 13.5px; wh
 .badge-developer { background: rgba(16, 185, 129, .16); color: #6ee7b7; }
 .badge-viewer { background: rgba(255, 255, 255, .08); color: var(--text-muted); }
 
+/* Outcome badges (SQL Studio's result banner) — semantic status, not
+   identity, so these reuse --accent/--danger directly rather than one
+   of the four role badges' colors, which happen to be similar hues but
+   mean something else entirely. */
+.badge-success { background: var(--accent-bg); color: var(--accent-fg); }
+.badge-danger { background: var(--danger-bg); color: var(--danger); }
+
 /* --- alerts --------------------------------------------------------------- */
 
 .alert {
@@ -313,7 +320,38 @@ table.data-table { width: 100%; border-collapse: collapse; font-size: 13.5px; wh
   tab-size: 2;
 }
 .sql-editor:focus { outline: none; border-color: var(--accent); }
+.sql-result-banner { display: flex; align-items: center; gap: 10px; margin: 16px 0 4px; }
 .sql-result-meta { font-size: 12.5px; color: var(--text-muted); margin: 12px 0; }
+
+/* CodeMirror progressively enhances the plain .sql-editor textarea above
+   into this — see templates/sql_studio.html's script. Sized/bordered to
+   match .sql-editor exactly so there's no layout jump once it mounts. */
+.CodeMirror {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.CodeMirror:focus-within { border-color: var(--accent); }
+
+/* .cm-s-maubase: a syntax theme hand-matched to this file's own tokens
+   (see NOTICE.md — CodeMirror's own theme files aren't vendored, since
+   none of them are tuned to these particular colors). Reuses the same
+   blue/amber/green trio the role badges already use, so a query and an
+   audit-log badge read as part of one palette instead of two. */
+.cm-s-maubase.CodeMirror { background: var(--sidebar-bg); color: var(--text); }
+.cm-s-maubase .CodeMirror-gutters { background: var(--sidebar-bg); border-right: 1px solid var(--border); }
+.cm-s-maubase .CodeMirror-linenumber { color: var(--text-faint); }
+.cm-s-maubase .CodeMirror-cursor { border-left: 1px solid var(--accent); }
+.cm-s-maubase .CodeMirror-selected { background: var(--accent-bg); }
+.cm-s-maubase .CodeMirror-activeline-background { background: var(--surface-hover); }
+.cm-s-maubase .cm-keyword { color: #93c5fd; }
+.cm-s-maubase .cm-builtin, .cm-s-maubase .cm-atom { color: #93c5fd; }
+.cm-s-maubase .cm-string, .cm-s-maubase .cm-string-2 { color: #fbbf24; }
+.cm-s-maubase .cm-number { color: #6ee7b7; }
+.cm-s-maubase .cm-comment { color: var(--text-faint); font-style: italic; }
+.cm-s-maubase .cm-operator, .cm-s-maubase .cm-punctuation { color: var(--text-muted); }
+.cm-s-maubase .cm-variable, .cm-s-maubase .cm-variable-2, .cm-s-maubase .cm-property { color: var(--text); }
 
 .login-shell {
   min-height: 100vh;

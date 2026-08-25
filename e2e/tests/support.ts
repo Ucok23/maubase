@@ -53,6 +53,21 @@ export async function signOut(page: Page) {
   ]);
 }
 
+// setSQLQuery fills SQL Studio's editor. It can't be page.fill('textarea
+// [name="query"]', ...) — CodeMirror.fromTextArea (see
+// templates/sql_studio.html) hides that textarea and mounts a
+// contenteditable-based editor in its place, keeping the two in sync
+// itself. CodeMirror exposes the live editor instance as a property on
+// its own wrapper element, so this talks to that directly rather than
+// simulating clicks/keystrokes into a rich-text widget.
+export async function setSQLQuery(page: Page, sql: string) {
+  await page.evaluate((value) => {
+    const wrapper = document.querySelector<HTMLElement & { CodeMirror?: { setValue(v: string): void } }>('.CodeMirror');
+    if (!wrapper?.CodeMirror) throw new Error('CodeMirror did not mount on SQL Studio');
+    wrapper.CodeMirror.setValue(value);
+  }, sql);
+}
+
 // createOwnerAccount drives the Members page's own "Add an owner" form
 // (rather than calling the JSON API directly) — provisioning the test
 // accounts other specs sign in as is itself exercised UI, the same form

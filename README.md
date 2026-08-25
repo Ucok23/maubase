@@ -187,7 +187,11 @@ What's here now (v1, step 1 of the roadmap):
     more dangerous than anything else here, so it's gated a tier above
     Members/Audit-log/Maintenance, and every run (success or failure) is
     audit-logged. A `CREATE`/`ALTER`/`DROP` run here reloads the schema
-    too, same as the create-table form.
+    too, same as the create-table form. The editor itself is CodeMirror
+    5 (vendored, not a CDN — see `internal/adminui/static/NOTICE.md`)
+    with a syntax theme hand-matched to the rest of the UI, and every
+    run shows a Supabase-style "Success · N rows · Xms" banner instead
+    of a bare row count.
 
 ## Not yet built (see roadmap)
 

@@ -3,6 +3,13 @@
 // and the create-table form (ADMINUI-21, also developer+) — but the
 // sidebar offers nothing above that tier (ADMINUI-31), and Members
 // itself, which needs admin+, still blocks a direct visit.
+//
+// The Users-panel create-account submission itself (not just that the
+// form is visible) is also covered as a developer specifically —
+// admin-ui-flow.spec.ts only ever exercises that as owner, and the Go
+// suite's TestAdminUI_DeveloperCanCreateUserViewerCannot only exercises
+// it as a direct HTTP POST, never a real browser click-through as a
+// developer.
 import { test, expect } from '@playwright/test';
 import { OWNER_EMAIL, OWNER_PASSWORD, createOwnerAccount, makeShotter, signIn, signOut } from './support';
 
@@ -44,6 +51,19 @@ test('a developer gets write controls on data and users, and can define a table,
     await page.waitForURL('**/admin/ui/users');
     await expect(page.getByText('Create a user')).toBeVisible();
     await shot(page, 'users-with-write-controls');
+  });
+
+  await test.step('a developer can actually create a customer account', async () => {
+    const newUserEmail = `e2e-dev-created-${Date.now()}@example.com`;
+    const form = page.locator('form[action="/admin/ui/users"]');
+    await form.locator('input[name="email"]').fill(newUserEmail);
+    await form.locator('input[name="password"]').fill('created-password-1');
+    await Promise.all([
+      page.waitForURL('**/admin/ui/users'),
+      form.locator('button[type="submit"]').click(),
+    ]);
+    await expect(page.getByText(newUserEmail)).toBeVisible();
+    await shot(page, 'users-after-create');
   });
 
   await test.step('the new-table form itself is reachable', async () => {

@@ -1,18 +1,23 @@
 {{define "sql_studio"}}{{template "header" .}}
 <div class="alert alert-info">Runs directly against the database — every table, including internal ones. One statement per run. Owner-only, and every run is recorded to the audit log.</div>
-{{if .Error}}<div class="alert">{{.Error}}</div>{{end}}
 
 <form method="POST" action="/admin/ui/sql">
-<textarea class="sql-editor" name="query" spellcheck="false" placeholder="select * from sqlite_master where type = 'table';">{{.Query}}</textarea>
-<div style="margin-top:12px"><button type="submit" class="btn btn-primary">Run query</button></div>
+<textarea id="sql-editor" class="sql-editor" name="query" spellcheck="false" placeholder="select * from sqlite_master where type = 'table';">{{.Query}}</textarea>
+<div style="margin-top:12px;display:flex;align-items:center;gap:10px">
+<button type="submit" class="btn btn-primary">Run query</button>
+<span class="meta-line" style="margin:0">or Ctrl/Cmd+Enter</span>
+</div>
 </form>
 
-{{if .Executed}}
-<p class="sql-result-meta">{{.Affected}} row(s) affected.</p>
+{{if .Error}}
+<div class="sql-result-banner"><span class="badge badge-danger">Error</span><span class="sql-result-meta">{{.DurationMS}}ms</span></div>
+<div class="alert">{{.Error}}</div>
 {{end}}
-
+{{if .Executed}}
+<div class="sql-result-banner"><span class="badge badge-success">Success</span><span class="sql-result-meta">{{.Affected}} row(s) affected · {{.DurationMS}}ms</span></div>
+{{end}}
 {{if .Columns}}
-<p class="sql-result-meta">{{.RowCount}} row(s) returned.</p>
+<div class="sql-result-banner"><span class="badge badge-success">Success</span><span class="sql-result-meta">{{.RowCount}} row(s) returned · {{.DurationMS}}ms</span></div>
 <div class="table-wrap">
 <table class="data-table">
 <thead><tr>{{range .Columns}}<th>{{.}}</th>{{end}}</tr></thead>
@@ -23,7 +28,34 @@
 </tbody>
 </table>
 </div>
-{{else if not .Executed}}{{if not .Error}}
+{{end}}
+{{if not .Error}}{{if not .Executed}}{{if not .Columns}}
 <p class="sql-result-meta">No results yet.</p>
-{{end}}{{end}}
+{{end}}{{end}}{{end}}
+
+<script>
+// Progressive enhancement only: the plain <textarea name="query"> above
+// works and submits fine on its own (that's what the form actually
+// posts either way — CodeMirror.fromTextArea keeps it in sync). If the
+// vendored CodeMirror assets ever fail to load, this silently no-ops
+// and SQL Studio degrades to the plain textarea it always was.
+if (window.CodeMirror) {
+  var cm = CodeMirror.fromTextArea(document.getElementById('sql-editor'), {
+    mode: 'text/x-sqlite',
+    theme: 'maubase',
+    lineNumbers: true,
+    tabSize: 2,
+    indentUnit: 2,
+  });
+  cm.setSize(null, 220);
+  cm.on('keydown', function (instance, e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      instance.save();
+      var form = instance.getTextArea().form;
+      if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
+    }
+  });
+}
+</script>
 {{template "footer" .}}{{end}}
