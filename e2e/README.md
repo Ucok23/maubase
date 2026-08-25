@@ -9,10 +9,29 @@ Go end-to-end suite in `/test`: that one never opens a browser (it drives
 HTTP directly), this one only exists because the admin UI is the one
 surface in this repo with an actual UI to look at.
 
-The one test (`tests/admin-ui-flow.spec.ts`) walks the whole loop: sign in
-as the bootstrap owner → dashboard → data browser → Users panel → create a
-customer account → view its detail page → sign it out everywhere → delete
-it → confirm all three actions landed in the audit log → sign out.
+Five specs, one test each (see any spec file for why one-test-per-file:
+`scripts/build-report.mjs` expects exactly one screenshot sequence per
+spec), covering the admin UI from every role that can sign into it, not
+just owner:
+
+- `admin-ui-flow.spec.ts` — owner: the Users panel end to end (create a
+  customer account, view its detail page, sign it out everywhere, delete
+  it, confirm all three landed in the audit log).
+- `owner-console.spec.ts` — owner: everything else owner-only —
+  Members (add/remove another owner-plane account), Maintenance, defining
+  a table live from the UI, CRUD on its rows, and SQL Studio (including
+  confirming a DDL statement run there shows up in the data browser
+  immediately, no restart).
+- `viewer-access.spec.ts` / `developer-access.spec.ts` /
+  `admin-access.spec.ts` — the same admin UI from each of the other three
+  roles' own seat: what write controls are (and aren't) visible, and that
+  a page above that role's tier actually renders the Forbidden page in
+  the browser, not just a `403` off in an HTTP response
+  (`test/adminui_test.go`'s `TestAdminUI_RoleBelowPageMinimumGets403`
+  checks the same thing over raw HTTP; these check what actually paints
+  on screen). Each provisions its own throwaway account via the Members
+  page's own form — dogfooding the UI, not a JSON-API shortcut around it
+  — so the three don't depend on each other or on run order.
 
 ## Platform note
 
