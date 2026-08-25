@@ -39,22 +39,30 @@ func NewServer(db *sql.DB, registry *Registry, oauthSvc *oauth.Server, broker *r
 	return &Server{db: db, registry: registry, oauth: oauthSvc, broker: broker}
 }
 
-// publish hands ev to the realtime broker, if there is one. ownerID is ""
-// for a shared table (every current subscriber of the collection is
-// authorized), or the row's owner_id otherwise (only the subscriber with
-// that subject is) — see realtime.Broker.Publish.
-func (s *Server) publish(ev realtime.Event, ownerID string) {
-	if s.broker == nil {
+// publish hands ev to the realtime broker, if there is one — except when
+// col.ReadRule is RuleDenied, in which case it does nothing at all: no
+// caller is authorized to read that collection, so no subscriber ever
+// should have been able to see this event either (spec/realtime.md
+// RT-06). ownerID is "" for a RuleShared read (every current subscriber
+// of the collection is authorized), or the row's owner_id otherwise
+// (only the subscriber with that subject is) — see
+// realtime.Broker.Publish.
+func (s *Server) publish(col *Collection, ev realtime.Event, ownerID string) {
+	if s.broker == nil || col.ReadRule == RuleDenied {
 		return
 	}
 	s.broker.Publish(ev, ownerID)
 }
 
-// rowOwnerID returns the value that should gate visibility of an event
-// on col: the acting subject if col is owner-scoped (that's whose row
-// this now is, or was), or "" if col is shared.
+// rowOwnerID returns the value that should gate realtime visibility of an
+// event on col: the acting subject if col's *read* rule is RuleOwner
+// (only that subject could ever GET this row), or "" if reads are
+// RuleShared (every subscriber authorized to read the collection could
+// GET it, regardless of who wrote it) — matching REST-OWNERSHIP-01/02's
+// visibility exactly, not just whether the table happens to have an
+// owner_id column.
 func rowOwnerID(col *Collection, subj string) string {
-	if col.OwnerColumn != "" {
+	if col.ReadRule == RuleOwner {
 		return subj
 	}
 	return ""
@@ -79,11 +87,14 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.authorizeOp(w, col.ReadRule) {
+		return
+	}
 	limit, offset := parsePagination(r)
 
 	query := fmt.Sprintf("SELECT * FROM %s", quoteIdent(col.Name))
 	var args []any
-	if col.OwnerColumn != "" {
+	if col.ReadRule == RuleOwner {
 		query += fmt.Sprintf(" WHERE %s = ?", quoteIdent(col.OwnerColumn))
 		args = append(args, subject(r))
 	}
@@ -108,7 +119,10 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	record, err := s.fetchByPK(r.Context(), col, chi.URLParam(r, "id"), subject(r))
+	if !s.authorizeOp(w, col.ReadRule) {
+		return
+	}
+	record, err := s.fetchByPK(r.Context(), col, chi.URLParam(r, "id"), col.ReadRule == RuleOwner, subject(r))
 	if errors.Is(err, sql.ErrNoRows) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
@@ -125,6 +139,9 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.authorizeOp(w, col.CreateRule) {
+		return
+	}
 	body, ok := decodeBody(w, r, col)
 	if !ok {
 		return
@@ -132,7 +149,9 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	// The owner (if any) is always the token's subject, never whatever
 	// the client sent — this is what makes row-level ownership actually
-	// enforceable rather than advisory.
+	// enforceable rather than advisory. Unaffected by CreateRule: a
+	// RuleShared create widens *who* may create, never what the created
+	// row's ownership is (spec/access-rules.md ACCESS-04).
 	if col.OwnerColumn != "" {
 		body[col.OwnerColumn] = subject(r)
 	}
@@ -181,19 +200,23 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	// Re-fetch rather than echo the input back, so the response reflects
 	// whatever the database actually stored (defaults, affinity coercion,
-	// etc.), not just what was sent.
-	record, err := s.fetchByPK(r.Context(), col, pkValue, subject(r))
+	// etc.), not just what was sent. Unscoped: the INSERT that just
+	// succeeded already proves the caller is entitled to this exact row.
+	record, err := s.fetchByPK(r.Context(), col, pkValue, false, "")
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.publish(realtime.Event{Type: "created", Collection: col.Name, Record: record}, rowOwnerID(col, subject(r)))
+	s.publish(col, realtime.Event{Type: "created", Collection: col.Name, Record: record}, rowOwnerID(col, subject(r)))
 	writeJSON(w, http.StatusCreated, record)
 }
 
 func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	col, ok := s.collection(w, r)
 	if !ok {
+		return
+	}
+	if !s.authorizeOp(w, col.UpdateRule) {
 		return
 	}
 	body, ok := decodeBody(w, r, col)
@@ -222,7 +245,10 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		// Everything sent was immutable and got stripped: a legitimate
 		// no-op, not an error, but existence/ownership still gate it —
 		// PATCHing someone else's (or a nonexistent) record is still 404.
-		record, err := s.fetchByPK(r.Context(), col, id, subject(r))
+		// Scoped by UpdateRule, not ReadRule: this stands in for the
+		// update that would have run, so it should be authorized the
+		// same way that update would have been.
+		record, err := s.fetchByPK(r.Context(), col, id, col.UpdateRule == RuleOwner, subject(r))
 		if errors.Is(err, sql.ErrNoRows) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 			return
@@ -243,7 +269,7 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s = ?", quoteIdent(col.Name), strings.Join(sets, ", "), quoteIdent(col.PKColumn))
 	vals = append(vals, id)
-	if col.OwnerColumn != "" {
+	if col.UpdateRule == RuleOwner {
 		query += fmt.Sprintf(" AND %s = ?", quoteIdent(col.OwnerColumn))
 		vals = append(vals, subject(r))
 	}
@@ -261,12 +287,14 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, err := s.fetchByPK(r.Context(), col, id, subject(r))
+	// Unscoped: the UPDATE that just succeeded already proves the caller
+	// was entitled to this exact row.
+	record, err := s.fetchByPK(r.Context(), col, id, false, "")
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.publish(realtime.Event{Type: "updated", Collection: col.Name, Record: record}, rowOwnerID(col, subject(r)))
+	s.publish(col, realtime.Event{Type: "updated", Collection: col.Name, Record: record}, rowOwnerID(col, subject(r)))
 	writeJSON(w, http.StatusOK, record)
 }
 
@@ -275,10 +303,13 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.authorizeOp(w, col.DeleteRule) {
+		return
+	}
 	id := chi.URLParam(r, "id")
 	query := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", quoteIdent(col.Name), quoteIdent(col.PKColumn))
 	args := []any{id}
-	if col.OwnerColumn != "" {
+	if col.DeleteRule == RuleOwner {
 		query += fmt.Sprintf(" AND %s = ?", quoteIdent(col.OwnerColumn))
 		args = append(args, subject(r))
 	}
@@ -292,7 +323,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
-	s.publish(realtime.Event{Type: "deleted", Collection: col.Name, ID: id}, rowOwnerID(col, subject(r)))
+	s.publish(col, realtime.Event{Type: "deleted", Collection: col.Name, ID: id}, rowOwnerID(col, subject(r)))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -340,7 +371,7 @@ func (s *Server) DeleteOwned(ctx context.Context, subj string) error {
 			return err
 		}
 		for _, id := range ids {
-			s.publish(realtime.Event{Type: "deleted", Collection: col.Name, ID: id}, subj)
+			s.publish(col, realtime.Event{Type: "deleted", Collection: col.Name, ID: id}, subj)
 		}
 	}
 	return nil
@@ -383,10 +414,29 @@ func (s *Server) collection(w http.ResponseWriter, r *http.Request) (*Collection
 	return col, true
 }
 
-func (s *Server) fetchByPK(ctx context.Context, col *Collection, pkValue any, subj string) (map[string]any, error) {
+// authorizeOp rejects a request whose operation is RuleDenied for its
+// collection, writing 403 (and returning ok=false) — distinct from the
+// 404 an unknown collection or an ownership violation gets: the
+// operation exists and the caller may well be authorized in general, but
+// this specific action has been turned off for this collection at the
+// API layer. See spec/access-rules.md ACCESS-05/06/07.
+func (s *Server) authorizeOp(w http.ResponseWriter, rule Rule) bool {
+	if rule == RuleDenied {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "this operation is disabled for this collection"})
+		return false
+	}
+	return true
+}
+
+// fetchByPK looks up one row by primary key. scopeToOwner adds an
+// AND owner_id = subj clause when true — pass col.ReadRule == RuleOwner
+// for a genuine read (handleGet, or an update/delete's pre-check standing
+// in for one), or false for a lookup right after a write whose own WHERE
+// clause already proved the caller was entitled to that exact row.
+func (s *Server) fetchByPK(ctx context.Context, col *Collection, pkValue any, scopeToOwner bool, subj string) (map[string]any, error) {
 	query := fmt.Sprintf("SELECT * FROM %s WHERE %s = ?", quoteIdent(col.Name), quoteIdent(col.PKColumn))
 	args := []any{pkValue}
-	if col.OwnerColumn != "" {
+	if scopeToOwner {
 		query += fmt.Sprintf(" AND %s = ?", quoteIdent(col.OwnerColumn))
 		args = append(args, subj)
 	}

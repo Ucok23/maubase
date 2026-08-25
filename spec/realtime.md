@@ -4,12 +4,9 @@ Every other surface is request/response HTTP: a client notices a change
 only by polling. This is a WebSocket stream that instead pushes row
 changes as they happen, layered on top of auto-REST's existing row-level
 visibility rules (`owner_id`, and any `_policies` override — see
-`spec/access-rules.md`, not yet built) rather than introducing a separate
-authorization model. See `internal/realtime` for the implementation.
-
-RT-06 has no implementation yet — it depends on `_policies`
-(`spec/access-rules.md`), which isn't built. Every other scenario here is
-implemented and tested (`test/realtime_test.go`).
+`spec/access-rules.md`) rather than introducing a separate authorization
+model. See `internal/realtime` for the implementation, `test/realtime_test.go`
+for the tests.
 
 ## The model
 

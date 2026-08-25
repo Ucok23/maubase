@@ -126,11 +126,22 @@ What's here now (v1, step 1 of the roadmap):
   single-server-process design, would need an external broker if that
   ever changed).
 
+- Row-level access rules (`internal/restapi/registry.go`'s
+  `applyPolicies`, `spec/access-rules.md`): beyond the owner_id
+  convention, a deployment can override a specific operation
+  (read/create/update/delete) for a specific collection via a row in the
+  reserved `_policies` table, declared the same way application tables
+  are — its own migrations, no separate admin API. Three rules:
+  `owner` (default for an owner-scoped table), `shared` (default for one
+  without `owner_id`; unfiltered by row), and `denied` (that operation
+  off entirely, `403`, regardless of caller). Operations are independent
+  — e.g. `read: shared` with everything else left at its owner default
+  gives public read / owner-only write on one table. Realtime respects
+  the same rules: a `denied` read means no subscriber is ever notified of
+  that collection's changes either (spec/realtime.md RT-06).
+
 ## Not yet built (see roadmap)
 
-- Row-level access rules beyond the owner_id convention (e.g. custom
-  per-collection policies). Design spec already written:
-  `spec/access-rules.md`.
 - Embedded admin UI (would sit on top of the owner plane above).
 
 ## Compliance posture
