@@ -1,0 +1,33 @@
+{{define "header"}}<!doctype html>
+<html data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · maubase admin</title>
+<link rel="stylesheet" href="/admin/ui/static/pico.min.css">
+<script src="/admin/ui/static/htmx.min.js"></script>
+</head>
+<body>
+<nav class="container-fluid">
+<ul><li><strong>maubase admin</strong></li></ul>
+<ul>
+<li><a href="/admin/ui">Dashboard</a></li>
+<li><a href="/admin/ui/data">Data</a></li>
+<li><a href="/admin/ui/owners">Owners</a></li>
+<li><a href="/admin/ui/audit-log">Audit log</a></li>
+<li><a href="/admin/ui/maintenance">Maintenance</a></li>
+</ul>
+<ul>
+{{if .Owner}}
+<li>{{.Owner.Email}} ({{.Owner.Role}})</li>
+<li><form method="POST" action="/admin/ui/logout" style="margin:0"><button type="submit" class="secondary outline">Log out</button></form></li>
+{{end}}
+</ul>
+</nav>
+<main class="container">
+{{end}}
+
+{{define "footer"}}</main>
+</body>
+</html>
+{{end}}

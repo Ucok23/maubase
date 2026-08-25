@@ -1,0 +1,23 @@
+{{define "audit_log"}}{{template "header" .}}
+<h1>Audit log</h1>
+<table>
+<thead><tr><th>When</th><th>Event</th><th>Actor</th><th>Target</th></tr></thead>
+<tbody>
+{{range .Entries}}
+<tr>
+<td>{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
+<td>{{.Event}}</td>
+<td>{{.ActorEmail}}</td>
+<td>{{.TargetEmail}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{if not .Entries}}<p>No entries yet.</p>{{end}}
+<nav>
+<ul>
+{{if gt .Offset 0}}<li><a href="?limit={{.Limit}}&offset={{sub .Offset .Limit}}">&larr; Newer</a></li>{{end}}
+{{if eq (len .Entries) .Limit}}<li><a href="?limit={{.Limit}}&offset={{add .Offset .Limit}}">Older &rarr;</a></li>{{end}}
+</ul>
+</nav>
+{{template "footer" .}}{{end}}

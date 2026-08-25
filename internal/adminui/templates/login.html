@@ -1,0 +1,21 @@
+{{define "login"}}<!doctype html>
+<html data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · maubase admin</title>
+<link rel="stylesheet" href="/admin/ui/static/pico.min.css">
+</head>
+<body>
+<main class="container" style="max-width:400px;margin-top:4rem">
+<h1>maubase admin</h1>
+{{if .Error}}<p style="color:var(--pico-del-color)">{{.Error}}</p>{{end}}
+<form method="POST" action="/admin/ui/login">
+<label>Email<input type="email" name="email" value="{{.Email}}" required autofocus></label>
+<label>Password<input type="password" name="password" required></label>
+<button type="submit">Sign in</button>
+</form>
+</main>
+</body>
+</html>
+{{end}}

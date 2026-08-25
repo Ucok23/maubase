@@ -1,0 +1,10 @@
+{{define "dashboard"}}{{template "header" .}}
+<h1>Dashboard</h1>
+<p>Signed in as {{.Owner.Email}}, role <strong>{{.Owner.Role}}</strong>.</p>
+<div class="grid">
+<article><header>Data</header><p>Browse and edit application tables — every row, regardless of owner.</p><a href="/admin/ui/data" role="button">Open</a></article>
+<article><header>Owners</header><p>Manage who can administer this deployment.</p><a href="/admin/ui/owners" role="button">Open</a></article>
+<article><header>Audit log</header><p>See who did what, and when.</p><a href="/admin/ui/audit-log" role="button">Open</a></article>
+<article><header>Maintenance</header><p>Purge expired sessions on demand.</p><a href="/admin/ui/maintenance" role="button">Open</a></article>
+</div>
+{{template "footer" .}}{{end}}

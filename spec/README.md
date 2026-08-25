@@ -27,3 +27,4 @@ and so a spec change makes it easy to find what needs re-verifying.
 - [maintenance.md](maintenance.md) — session cleanup and login rate-limiting
 - [access-rules.md](access-rules.md) — row-level access rules beyond `owner_id`
 - [realtime.md](realtime.md) — realtime subscriptions
+- [admin-ui.md](admin-ui.md) — the embedded admin UI

@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"maubase/internal/adminui"
 	"maubase/internal/audit"
 	"maubase/internal/auth"
 	"maubase/internal/oauth"
@@ -27,6 +28,7 @@ type Server struct {
 	restapi   *restapi.Server
 	storage   *storage.Server
 	realtime  *realtime.Server
+	adminui   *adminui.Server
 	audit     *audit.Log
 	router    chi.Router
 
@@ -37,9 +39,9 @@ type Server struct {
 // throttle on the login endpoints (see internal/ratelimit); pass 0 for
 // loginRateLimit to disable it (unlimited attempts) — useful for tests
 // that aren't exercising rate-limiting and don't want to think about it.
-func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.Service, restapiSvc *restapi.Server, storageSvc *storage.Server, realtimeSvc *realtime.Server, auditLog *audit.Log, loginRateLimit int, loginRateWindow time.Duration) *Server {
+func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.Service, restapiSvc *restapi.Server, storageSvc *storage.Server, realtimeSvc *realtime.Server, adminuiSvc *adminui.Server, auditLog *audit.Log, loginRateLimit int, loginRateWindow time.Duration) *Server {
 	s := &Server{
-		auth: authSvc, oauth: oauthSvc, ownerAuth: ownerAuthSvc, restapi: restapiSvc, storage: storageSvc, realtime: realtimeSvc, audit: auditLog,
+		auth: authSvc, oauth: oauthSvc, ownerAuth: ownerAuthSvc, restapi: restapiSvc, storage: storageSvc, realtime: realtimeSvc, adminui: adminuiSvc, audit: auditLog,
 		loginLimiter: ratelimit.New(loginRateLimit, loginRateWindow),
 	}
 
@@ -119,6 +121,11 @@ func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.
 		r.Use(s.requireOwnerRole(ownerauth.RoleAdmin))
 		r.Post("/purge-sessions", s.handlePurgeSessions)
 	})
+
+	// Embedded admin UI: /admin/ui/*, the owner plane's browser-facing
+	// surface — same session cookie and roles as the JSON routes above.
+	// See internal/adminui.
+	s.adminui.Mount(r)
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

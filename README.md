@@ -140,9 +140,28 @@ What's here now (v1, step 1 of the roadmap):
   the same rules: a `denied` read means no subscriber is ever notified of
   that collection's changes either (spec/realtime.md RT-06).
 
+- Embedded admin UI (`internal/adminui`, `spec/admin-ui.md`): server-
+  rendered HTML under `/admin/ui/*` — login, dashboard, owner management,
+  audit log, a "purge expired sessions" button, and a data browser — using
+  the same owner-plane session cookie and roles the JSON `/admin/*` API
+  already enforces. No JS build step: `html/template` plus a vendored
+  htmx.js/Pico.css, both `go:embed`'d, the same "no asset pipeline"
+  approach `internal/oauth`'s login/consent screens already took. The
+  data browser is a deliberately different surface from
+  `/api/data/{table}`: unscoped by `owner_id` (an owner sees every row,
+  not just "their own") and unaffected by `_policies` entirely — those
+  govern only the customer-facing, OAuth-token-authenticated path, never
+  the owner plane's own direct access to its database. Viewing needs
+  `viewer`+; creating/editing/deleting rows (including reassigning a
+  row's `owner_id` directly, an admin-only capability) needs `developer`+.
+
 ## Not yet built (see roadmap)
 
-- Embedded admin UI (would sit on top of the owner plane above).
+Nothing outstanding on the original roadmap — see "Compliance posture"
+below for what's still explicitly left to a deployer, and the spec files
+under `spec/` for anything with more headroom (e.g. `spec/access-rules.md`
+covers a single override per operation; multi-condition policies would be
+a bigger follow-up, not a v1 gap).
 
 ## Compliance posture
 

@@ -1,0 +1,7 @@
+{{define "data_collections"}}{{template "header" .}}
+<h1>Data</h1>
+<ul>
+{{range .Collections}}<li><a href="/admin/ui/data/{{.Name}}">{{.Name}}</a></li>{{end}}
+</ul>
+{{if not .Collections}}<p>No application tables yet — add one via your own migrations (see <code>MAUBASE_MIGRATIONS_DIR</code>).</p>{{end}}
+{{template "footer" .}}{{end}}

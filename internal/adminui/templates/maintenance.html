@@ -1,0 +1,10 @@
+{{define "maintenance"}}{{template "header" .}}
+<h1>Maintenance</h1>
+<p>Purges session rows whose expiry has already passed — pure storage hygiene, not something that changes what a valid or expired session can do (a background job already does this periodically; see spec/maintenance.md).</p>
+<form method="POST" action="/admin/ui/maintenance/purge-sessions">
+<button type="submit">Purge expired sessions</button>
+</form>
+{{if .Purged}}
+<p>Purged {{.SessionsPurged}} customer session(s) and {{.OwnerSessionsPurged}} owner session(s).</p>
+{{end}}
+{{template "footer" .}}{{end}}

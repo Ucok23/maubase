@@ -1,0 +1,4 @@
+{{define "forbidden"}}{{template "header" .}}
+<h1>403 Forbidden</h1>
+<p>Your role (<strong>{{.Owner.Role}}</strong>) doesn't have access to this page.</p>
+{{template "footer" .}}{{end}}
