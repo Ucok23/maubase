@@ -19,6 +19,7 @@ import (
 	"maubase/internal/ratelimit"
 	"maubase/internal/realtime"
 	"maubase/internal/restapi"
+	"maubase/internal/social"
 	"maubase/internal/storage"
 )
 
@@ -37,6 +38,13 @@ type Server struct {
 
 	email            email.Sender
 	passwordResetURL string
+
+	// socialProviders is keyed by name ("google", "github"); a provider
+	// missing from the map (its client id/secret weren't configured)
+	// makes GET /api/auth/social/{provider} 404, same as naming a
+	// provider that doesn't exist at all — see spec/social-login.md.
+	socialProviders     map[string]social.Provider
+	socialLoginRedirect string
 }
 
 // New wires the full HTTP API. loginRateLimit/Window configure the
@@ -47,12 +55,17 @@ type Server struct {
 // spec/password-reset.md; emailSender is typically email.NoopSender{}
 // (from config.Load, when MAUBASE_RESEND_API_KEY/EMAIL_FROM aren't set)
 // or email.NewFakeSender() in tests that need to inspect what was "sent".
-func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.Service, restapiSvc *restapi.Server, storageSvc *storage.Server, realtimeSvc *realtime.Server, adminuiSvc *adminui.Server, auditLog *audit.Log, loginRateLimit int, loginRateWindow time.Duration, emailSender email.Sender, passwordResetURL string) *Server {
+// socialProviders/socialLoginRedirect back "Continue with <provider>" —
+// see spec/social-login.md; an empty/nil map is fine, it just means no
+// provider is offered.
+func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.Service, restapiSvc *restapi.Server, storageSvc *storage.Server, realtimeSvc *realtime.Server, adminuiSvc *adminui.Server, auditLog *audit.Log, loginRateLimit int, loginRateWindow time.Duration, emailSender email.Sender, passwordResetURL string, socialProviders map[string]social.Provider, socialLoginRedirect string) *Server {
 	s := &Server{
 		auth: authSvc, oauth: oauthSvc, ownerAuth: ownerAuthSvc, restapi: restapiSvc, storage: storageSvc, realtime: realtimeSvc, adminui: adminuiSvc, audit: auditLog,
-		loginLimiter:     ratelimit.New(loginRateLimit, loginRateWindow),
-		email:            emailSender,
-		passwordResetURL: passwordResetURL,
+		loginLimiter:        ratelimit.New(loginRateLimit, loginRateWindow),
+		email:               emailSender,
+		passwordResetURL:    passwordResetURL,
+		socialProviders:     socialProviders,
+		socialLoginRedirect: socialLoginRedirect,
 	}
 
 	r := chi.NewRouter()
@@ -72,6 +85,8 @@ func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.
 		// same throttle at minimum, not a looser one of its own.
 		r.With(s.rateLimitLogin).Post("/forgot-password", s.handleForgotPassword)
 		r.Post("/reset-password", s.handleResetPassword)
+		r.Get("/social/{provider}", s.handleSocialStart)
+		r.Get("/social/{provider}/callback", s.handleSocialCallback)
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAuth)
 			r.Get("/me", s.handleMe)

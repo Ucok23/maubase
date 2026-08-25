@@ -23,6 +23,7 @@ import (
 	"maubase/internal/realtime"
 	"maubase/internal/restapi"
 	"maubase/internal/server"
+	"maubase/internal/social"
 	"maubase/internal/storage"
 )
 
@@ -65,6 +66,18 @@ type Options struct {
 	// only the tests actually asserting on the emailed link's shape need
 	// to set this themselves.
 	PasswordResetURL string
+
+	// SocialProviders backs GET /api/auth/social/{provider}[/callback] —
+	// nil/empty means no provider is configured (every provider 404s),
+	// the default for any test not exercising social login. A test that
+	// does should build its own social.Provider(s) pointed at a local
+	// httptest.Server standing in for Google/GitHub (see
+	// social.NewGoogle/NewGitHub, which take every endpoint URL
+	// explicitly for exactly this) rather than the real thing.
+	SocialProviders map[string]social.Provider
+	// SocialLoginRedirect defaults to a placeholder frontend URL if
+	// empty, same reasoning as PasswordResetURL.
+	SocialLoginRedirect string
 }
 
 // New starts a server on an ephemeral local port and returns its base URL
@@ -196,8 +209,12 @@ func newCustom(t *testing.T, opts Options) (string, error) {
 	if passwordResetURL == "" {
 		passwordResetURL = "http://localhost:3000/reset-password"
 	}
+	socialLoginRedirect := opts.SocialLoginRedirect
+	if socialLoginRedirect == "" {
+		socialLoginRedirect = "http://localhost:3000/welcome"
+	}
 
-	httpSrv := &http.Server{Handler: server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, adminuiSvc, auditLog, opts.LoginRateLimit, opts.LoginRateWindow, emailSender, passwordResetURL)}
+	httpSrv := &http.Server{Handler: server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, adminuiSvc, auditLog, opts.LoginRateLimit, opts.LoginRateWindow, emailSender, passwordResetURL, opts.SocialProviders, socialLoginRedirect)}
 	go httpSrv.Serve(lis) //nolint:errcheck // Serve always returns non-nil; Close() below triggers it deliberately
 	t.Cleanup(func() { httpSrv.Close() })
 

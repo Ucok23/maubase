@@ -312,6 +312,104 @@ func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword strin
 	return tx.Commit()
 }
 
+// LoginOrCreateViaSocial resolves a successful "Continue with <provider>"
+// round trip (internal/social) to a session, in one of three ways:
+//
+//  1. This exact (provider, providerUserID) pair has signed in before —
+//     just start a new session for the user it's already linked to.
+//  2. It hasn't, but email matches an existing account (however that
+//     account originally signed up — password or a different provider)
+//     — link this identity to it. This is the common "you already have
+//     an account with that email" case, and avoids ending up with two
+//     separate accounts for what's obviously the same person.
+//  3. Neither — create a brand new account and link this identity to
+//     it. It gets a random, never-revealed password (hashed, to satisfy
+//     users.password_hash's NOT NULL — nobody can ever type it, so the
+//     account is only reachable via this provider until/unless its
+//     owner uses password reset to set a real one) and, if the provider
+//     didn't supply a usable email at all (GitHub with no verified
+//     public address), a synthetic placeholder that still satisfies the
+//     UNIQUE constraint.
+func (s *Service) LoginOrCreateViaSocial(ctx context.Context, provider, providerUserID, email string) (*Session, error) {
+	var userID string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT user_id FROM social_identities WHERE provider = ? AND provider_user_id = ?
+	`, provider, providerUserID).Scan(&userID)
+	if err == nil {
+		return s.createSession(ctx, userID)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("lookup social identity: %w", err)
+	}
+
+	email = normalizeEmail(email)
+	if email != "" {
+		err = s.db.QueryRowContext(ctx, `SELECT id FROM users WHERE email = ?`, email).Scan(&userID)
+	} else {
+		err = sql.ErrNoRows
+	}
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		userID, email, err = s.createUserForSocialSignIn(ctx, provider, providerUserID, email)
+		if err != nil {
+			return nil, err
+		}
+	case err != nil:
+		return nil, fmt.Errorf("lookup user by email: %w", err)
+	}
+
+	// email is never "" here: either the lookup above only ran because
+	// it already wasn't, or createUserForSocialSignIn resolved it to a
+	// real or placeholder address.
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO social_identities (id, user_id, provider, provider_user_id, email) VALUES (?, ?, ?, ?, ?)
+	`, uuid.NewString(), userID, provider, providerUserID, email); err != nil {
+		return nil, fmt.Errorf("link social identity: %w", err)
+	}
+	return s.createSession(ctx, userID)
+}
+
+// createUserForSocialSignIn handles LoginOrCreateViaSocial's case 3.
+// Split out mainly to keep the unique-email race (two requests for a
+// brand-new account landing here at once — unlikely, but a provider
+// callback is exactly the kind of double-fired request a flaky network
+// produces) contained to one place: losing that race just means the
+// winner's row is the one to link to, not a real error.
+func (s *Service) createUserForSocialSignIn(ctx context.Context, provider, providerUserID, email string) (userID, resolvedEmail string, err error) {
+	if email == "" {
+		// A guaranteed-unique placeholder — this account is only ever
+		// reachable via this provider until its owner sets a real email
+		// (not yet exposed) or a password via reset (which does work:
+		// forgot-password's "always 204, don't reveal whether it's
+		// real" behavior extends naturally to a synthetic address too).
+		email = fmt.Sprintf("%s-%s@users.noreply.%s.invalid", provider, providerUserID, provider)
+	}
+
+	randPassword, err := randomToken(32)
+	if err != nil {
+		return "", "", fmt.Errorf("generate placeholder password: %w", err)
+	}
+	hash, err := hashPassword(randPassword)
+	if err != nil {
+		return "", "", fmt.Errorf("hash placeholder password: %w", err)
+	}
+
+	userID = uuid.NewString()
+	_, err = s.db.ExecContext(ctx, `INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)`, userID, email, hash)
+	if err == nil {
+		return userID, email, nil
+	}
+	if !isUniqueConstraintErr(err) {
+		return "", "", fmt.Errorf("insert user: %w", err)
+	}
+	// Lost a race against a concurrent sign-up/sign-in for the same
+	// email — link to whoever won it instead of erroring.
+	if lookupErr := s.db.QueryRowContext(ctx, `SELECT id FROM users WHERE email = ?`, email).Scan(&userID); lookupErr != nil {
+		return "", "", fmt.Errorf("lookup user after insert race: %w", lookupErr)
+	}
+	return userID, email, nil
+}
+
 func (s *Service) createSession(ctx context.Context, userID string) (*Session, error) {
 	rawToken, err := randomToken(32)
 	if err != nil {
