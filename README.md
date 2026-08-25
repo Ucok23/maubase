@@ -303,6 +303,16 @@ curl -c cj.txt -X POST localhost:8080/api/auth/signup \
 curl -b cj.txt localhost:8080/api/auth/me
 ```
 
+## JS/TS client SDK
+
+[`sdk/js/`](sdk/js/) is a TypeScript client (`@maubase/client`, not yet
+published) for building an actual app against this backend: `client.auth`
+wraps the identity layer above (cookie-based, no setup), and `client.data`
+wraps auto-REST — including driving the OAuth PKCE flow `/api/data/*`
+requires, which is normally a several-hundred-line undertaking on its
+own. See `sdk/js/README.md` for the real explanation of why those are two
+different auth models, not one.
+
 ## Design notes
 
 - `db.Open` sets `SetMaxOpenConns(1)`: SQLite only has one writer anyway,
