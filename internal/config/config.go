@@ -49,6 +49,21 @@ type Config struct {
 	// MaxUploadBytes caps a single file upload's size; a larger request
 	// body is rejected before it's fully read. See internal/storage.
 	MaxUploadBytes int64
+
+	// ResendAPIKey/EmailFrom configure outgoing transactional email (see
+	// internal/email). Both empty is a valid, common state — a
+	// deployment that never uses password reset doesn't need either —
+	// and gets internal/email.NoopSender, which fails clearly the first
+	// time something actually tries to send.
+	ResendAPIKey string
+	EmailFrom    string
+	// PasswordResetURL is the deployment's own frontend page that
+	// receives a password-reset link — maubase only issues/validates the
+	// token (POST /api/auth/forgot-password, POST /api/auth/reset-password);
+	// the page a human actually lands on and enters a new password into
+	// is the deployer's own app, not something this server renders.
+	// CreateResetToken's raw token is appended as ?token=.
+	PasswordResetURL string
 }
 
 func Load() Config {
@@ -64,6 +79,9 @@ func Load() Config {
 		SessionCleanupInterval: getEnvSeconds("MAUBASE_SESSION_CLEANUP_INTERVAL_SECONDS", time.Hour),
 		StorageDir:             getEnv("MAUBASE_STORAGE_DIR", "data/storage"),
 		MaxUploadBytes:         int64(getEnvInt("MAUBASE_MAX_UPLOAD_MB", 25)) * 1024 * 1024,
+		ResendAPIKey:           getEnv("MAUBASE_RESEND_API_KEY", ""),
+		EmailFrom:              getEnv("MAUBASE_EMAIL_FROM", ""),
+		PasswordResetURL:       getEnv("MAUBASE_PASSWORD_RESET_URL", ""),
 	}
 }
 

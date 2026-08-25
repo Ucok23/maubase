@@ -18,6 +18,7 @@ import (
 	"maubase/internal/auth"
 	"maubase/internal/config"
 	"maubase/internal/db"
+	"maubase/internal/email"
 	"maubase/internal/oauth"
 	"maubase/internal/ownerauth"
 	"maubase/internal/realtime"
@@ -83,7 +84,14 @@ func run() error {
 
 	adminuiSvc := adminui.NewServer(sqlDB, authSvc, ownerSvc, restapiSvc, storageSvc, oauthSvc, auditLog)
 
-	srv := server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, adminuiSvc, auditLog, cfg.LoginRateLimit, cfg.LoginRateWindow)
+	// Falls back to a sender that fails loudly rather than silently
+	// no-op'ing when Resend isn't configured — see email.NoopSender.
+	var emailSender email.Sender = email.NoopSender{}
+	if cfg.ResendAPIKey != "" && cfg.EmailFrom != "" {
+		emailSender = email.NewResendSender(cfg.ResendAPIKey, cfg.EmailFrom)
+	}
+
+	srv := server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, adminuiSvc, auditLog, cfg.LoginRateLimit, cfg.LoginRateWindow, emailSender, cfg.PasswordResetURL)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,

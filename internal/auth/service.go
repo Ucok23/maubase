@@ -24,6 +24,10 @@ import (
 // SessionTTL is how long an issued session cookie stays valid.
 const SessionTTL = 30 * 24 * time.Hour
 
+// ResetTokenTTL is how long a password-reset token stays redeemable
+// after CreateResetToken issues it.
+const ResetTokenTTL = time.Hour
+
 var emailRe = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
 
 type Service struct {
@@ -216,6 +220,96 @@ func (s *Service) PurgeExpiredSessions(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("purge expired sessions: %w", err)
 	}
 	return res.RowsAffected()
+}
+
+// CreateResetToken issues a password-reset token for the account with
+// the given email, if one exists. ok is false (with no error) when it
+// doesn't — a normal, expected outcome the HTTP handler uses to decide
+// whether to actually send an email, while still returning the exact
+// same response to the caller either way. Never revealing whether an
+// email is registered is the whole point (see spec/password-reset.md
+// PWRESET-02) — a caller that special-cased "no such account" into a
+// different response would defeat that regardless of what this method
+// itself does right.
+//
+// The returned raw token is only ever available here; only its hash is
+// persisted, the same pattern createSession already uses for session
+// tokens.
+func (s *Service) CreateResetToken(ctx context.Context, email string) (rawToken, userID string, ok bool, err error) {
+	email = normalizeEmail(email)
+	err = s.db.QueryRowContext(ctx, `SELECT id FROM users WHERE email = ?`, email).Scan(&userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, fmt.Errorf("lookup user: %w", err)
+	}
+
+	raw, err := randomToken(32)
+	if err != nil {
+		return "", "", false, fmt.Errorf("generate token: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)
+	`, uuid.NewString(), userID, hashToken(raw), time.Now().Add(ResetTokenTTL))
+	if err != nil {
+		return "", "", false, fmt.Errorf("insert reset token: %w", err)
+	}
+	return raw, userID, true, nil
+}
+
+// ResetPassword redeems a raw reset token: rejects it (ErrResetTokenInvalid)
+// if it doesn't exist, has expired, or has already been redeemed once
+// (single-use — PWRESET-05), otherwise sets the new password, marks the
+// token used, and revokes every session the account currently has. That
+// last part isn't optional: a password reset is exactly the moment you
+// want anyone already signed in — including, especially, whoever's
+// access prompted this reset in the first place — signed out
+// everywhere, the same guarantee ownerauth's forced-reauth-adjacent
+// flows already lean on elsewhere in this codebase.
+func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword string) error {
+	if len(newPassword) < 8 {
+		return ErrWeakPassword
+	}
+	tokenHash := hashToken(rawToken)
+
+	var id, userID string
+	var expiresAt time.Time
+	var usedAt sql.NullTime
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, user_id, expires_at, used_at FROM password_reset_tokens WHERE token_hash = ?
+	`, tokenHash).Scan(&id, &userID, &expiresAt, &usedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrResetTokenInvalid
+	}
+	if err != nil {
+		return fmt.Errorf("lookup reset token: %w", err)
+	}
+	if usedAt.Valid || time.Now().After(expiresAt) {
+		return ErrResetTokenInvalid
+	}
+
+	hash, err := hashPassword(newPassword)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeds
+
+	if _, err := tx.ExecContext(ctx, `UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, hash, userID); err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("mark reset token used: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID); err != nil {
+		return fmt.Errorf("revoke sessions: %w", err)
+	}
+	return tx.Commit()
 }
 
 func (s *Service) createSession(ctx context.Context, userID string) (*Session, error) {
