@@ -62,9 +62,16 @@ any real deployment. The bootstrap owner is `owner@e2e.test` /
 `MAUBASE_BOOTSTRAP_OWNER_EMAIL`/`_PASSWORD` env vars the server itself
 reads.
 
+`npm run test:report` (and so `make e2e`) also opens the finished report
+in your default browser when it's done — best-effort: on Linux this only
+fires if `DISPLAY`/`WAYLAND_DISPLAY` is set (so it's a silent no-op on a
+headless box or a sandboxed agent, never a hang or a failure), and a
+missing opener binary anywhere just prints the path instead of erroring.
+
 Just the tests, no report (e.g. while iterating on a spec file):
 `npm test`. Just rebuilding the report from the last run's output, no
-retest: `npm run report:build`.
+retest: `npm run report:build`. Just (re-)opening the last built report:
+`npm run open`.
 
 ## Where the output goes
 
