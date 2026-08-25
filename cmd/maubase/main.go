@@ -19,6 +19,7 @@ import (
 	"maubase/internal/db"
 	"maubase/internal/oauth"
 	"maubase/internal/ownerauth"
+	"maubase/internal/realtime"
 	"maubase/internal/restapi"
 	"maubase/internal/server"
 	"maubase/internal/storage"
@@ -61,11 +62,13 @@ func run() error {
 		return fmt.Errorf("bootstrap owner: %w", err)
 	}
 
+	broker := realtime.NewBroker()
+
 	registry, err := restapi.Discover(ctx, sqlDB)
 	if err != nil {
 		return fmt.Errorf("discover rest collections: %w", err)
 	}
-	restapiSvc := restapi.NewServer(sqlDB, registry, oauthSvc)
+	restapiSvc := restapi.NewServer(sqlDB, registry, oauthSvc, broker)
 
 	storageBackend, err := storage.NewLocalBackend(cfg.StorageDir)
 	if err != nil {
@@ -73,9 +76,11 @@ func run() error {
 	}
 	storageSvc := storage.NewServer(sqlDB, storageBackend, oauthSvc, cfg.MaxUploadBytes)
 
+	realtimeSvc := realtime.NewServer(broker, oauthSvc)
+
 	auditLog := audit.New(sqlDB)
 
-	srv := server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, auditLog, cfg.LoginRateLimit, cfg.LoginRateWindow)
+	srv := server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, auditLog, cfg.LoginRateLimit, cfg.LoginRateWindow)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,

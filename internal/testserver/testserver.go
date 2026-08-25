@@ -18,6 +18,7 @@ import (
 	"maubase/internal/db"
 	"maubase/internal/oauth"
 	"maubase/internal/ownerauth"
+	"maubase/internal/realtime"
 	"maubase/internal/restapi"
 	"maubase/internal/server"
 	"maubase/internal/storage"
@@ -125,11 +126,13 @@ func NewCustom(t *testing.T, opts Options) string {
 		}
 	}
 
+	broker := realtime.NewBroker()
+
 	registry, err := restapi.Discover(context.Background(), sqlDB)
 	if err != nil {
 		t.Fatalf("discover rest collections: %v", err)
 	}
-	restapiSvc := restapi.NewServer(sqlDB, registry, oauthSvc)
+	restapiSvc := restapi.NewServer(sqlDB, registry, oauthSvc, broker)
 
 	storageBackend, err := storage.NewLocalBackend(filepath.Join(t.TempDir(), "storage"))
 	if err != nil {
@@ -141,9 +144,11 @@ func NewCustom(t *testing.T, opts Options) string {
 	}
 	storageSvc := storage.NewServer(sqlDB, storageBackend, oauthSvc, maxUploadBytes)
 
+	realtimeSvc := realtime.NewServer(broker, oauthSvc)
+
 	auditLog := audit.New(sqlDB)
 
-	httpSrv := &http.Server{Handler: server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, auditLog, opts.LoginRateLimit, opts.LoginRateWindow)}
+	httpSrv := &http.Server{Handler: server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, auditLog, opts.LoginRateLimit, opts.LoginRateWindow)}
 	go httpSrv.Serve(lis) //nolint:errcheck // Serve always returns non-nil; Close() below triggers it deliberately
 	t.Cleanup(func() { httpSrv.Close() })
 

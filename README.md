@@ -113,11 +113,24 @@ What's here now (v1, step 1 of the roadmap):
     metadata (not raw bytes), and deletion removes both the bytes and the
     metadata row.
 
+- Realtime subscriptions (`internal/realtime`, `spec/realtime.md`):
+  `GET /api/realtime` upgrades to a WebSocket connection (same
+  `records:read` scope a `GET` would need), then a client subscribes per
+  collection (`{"type":"subscribe","collection":"posts"}`) and gets
+  pushed `created`/`updated`/`deleted` messages as rows change, gated by
+  the exact same row-level visibility auto-REST's `owner_id` convention
+  already enforces for `GET` — nothing bypasses it, since fan-out happens
+  inside auto-REST's own write handlers rather than through a separate
+  change feed. No replay/backfill in v1, and fan-out is in-process only
+  (see the spec's "Known v1 limit" — fine for this project's
+  single-server-process design, would need an external broker if that
+  ever changed).
+
 ## Not yet built (see roadmap)
 
 - Row-level access rules beyond the owner_id convention (e.g. custom
-  per-collection policies).
-- Realtime subscriptions.
+  per-collection policies). Design spec already written:
+  `spec/access-rules.md`.
 - Embedded admin UI (would sit on top of the owner plane above).
 
 ## Compliance posture

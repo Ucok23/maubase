@@ -15,6 +15,7 @@ import (
 	"maubase/internal/oauth"
 	"maubase/internal/ownerauth"
 	"maubase/internal/ratelimit"
+	"maubase/internal/realtime"
 	"maubase/internal/restapi"
 	"maubase/internal/storage"
 )
@@ -25,6 +26,7 @@ type Server struct {
 	ownerAuth *ownerauth.Service
 	restapi   *restapi.Server
 	storage   *storage.Server
+	realtime  *realtime.Server
 	audit     *audit.Log
 	router    chi.Router
 
@@ -35,9 +37,9 @@ type Server struct {
 // throttle on the login endpoints (see internal/ratelimit); pass 0 for
 // loginRateLimit to disable it (unlimited attempts) — useful for tests
 // that aren't exercising rate-limiting and don't want to think about it.
-func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.Service, restapiSvc *restapi.Server, storageSvc *storage.Server, auditLog *audit.Log, loginRateLimit int, loginRateWindow time.Duration) *Server {
+func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.Service, restapiSvc *restapi.Server, storageSvc *storage.Server, realtimeSvc *realtime.Server, auditLog *audit.Log, loginRateLimit int, loginRateWindow time.Duration) *Server {
 	s := &Server{
-		auth: authSvc, oauth: oauthSvc, ownerAuth: ownerAuthSvc, restapi: restapiSvc, storage: storageSvc, audit: auditLog,
+		auth: authSvc, oauth: oauthSvc, ownerAuth: ownerAuthSvc, restapi: restapiSvc, storage: storageSvc, realtime: realtimeSvc, audit: auditLog,
 		loginLimiter: ratelimit.New(loginRateLimit, loginRateWindow),
 	}
 
@@ -84,6 +86,10 @@ func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.
 	// need multipart/raw-byte handling generic JSON CRUD doesn't do). See
 	// internal/storage.
 	s.storage.Mount(r)
+
+	// Realtime: GET /api/realtime, a WebSocket stream of auto-REST's own
+	// write events. See internal/realtime.
+	s.realtime.Mount(r)
 
 	// Owner plane: the team running this deployment. Entirely separate
 	// cookie/session/table from the customer plane above and the OAuth

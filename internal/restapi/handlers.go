@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"maubase/internal/oauth"
+	"maubase/internal/realtime"
 )
 
 const (
@@ -28,10 +29,35 @@ type Server struct {
 	db       *sql.DB
 	registry *Registry
 	oauth    *oauth.Server
+	// broker is nil-able: a caller that doesn't want realtime fan-out
+	// (or hasn't built internal/realtime in yet) can pass nil, and
+	// publish becomes a no-op. See spec/realtime.md.
+	broker *realtime.Broker
 }
 
-func NewServer(db *sql.DB, registry *Registry, oauthSvc *oauth.Server) *Server {
-	return &Server{db: db, registry: registry, oauth: oauthSvc}
+func NewServer(db *sql.DB, registry *Registry, oauthSvc *oauth.Server, broker *realtime.Broker) *Server {
+	return &Server{db: db, registry: registry, oauth: oauthSvc, broker: broker}
+}
+
+// publish hands ev to the realtime broker, if there is one. ownerID is ""
+// for a shared table (every current subscriber of the collection is
+// authorized), or the row's owner_id otherwise (only the subscriber with
+// that subject is) — see realtime.Broker.Publish.
+func (s *Server) publish(ev realtime.Event, ownerID string) {
+	if s.broker == nil {
+		return
+	}
+	s.broker.Publish(ev, ownerID)
+}
+
+// rowOwnerID returns the value that should gate visibility of an event
+// on col: the acting subject if col is owner-scoped (that's whose row
+// this now is, or was), or "" if col is shared.
+func rowOwnerID(col *Collection, subj string) string {
+	if col.OwnerColumn != "" {
+		return subj
+	}
+	return ""
 }
 
 // Mount registers /api/data/{collection}[/{id}] onto r. Every method is
@@ -161,6 +187,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	s.publish(realtime.Event{Type: "created", Collection: col.Name, Record: record}, rowOwnerID(col, subject(r)))
 	writeJSON(w, http.StatusCreated, record)
 }
 
@@ -239,6 +266,7 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	s.publish(realtime.Event{Type: "updated", Collection: col.Name, Record: record}, rowOwnerID(col, subject(r)))
 	writeJSON(w, http.StatusOK, record)
 }
 
@@ -264,6 +292,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
+	s.publish(realtime.Event{Type: "deleted", Collection: col.Name, ID: id}, rowOwnerID(col, subject(r)))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -292,15 +321,51 @@ func (s *Server) ExportOwned(ctx context.Context, subj string) (map[string][]map
 // DeleteOwned deletes every row across every owner-scoped collection that
 // belongs to subj. Intended to run as part of account deletion, so no
 // application data is left behind, orphaned, once the user it belonged to
-// is gone.
+// is gone. Also publishes a "deleted" realtime event per row removed this
+// way (spec/realtime.md RT-04) — subj is the only subscriber who could
+// ever have been authorized to see any of these rows, so that's the only
+// one this can notify, same as an ordinary DELETE would.
 func (s *Server) DeleteOwned(ctx context.Context, subj string) error {
 	for _, col := range s.registry.ownedCollections() {
+		var ids []string
+		if s.broker != nil {
+			var err error
+			ids, err = s.pkValuesForOwner(ctx, col, subj)
+			if err != nil {
+				return err
+			}
+		}
 		query := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", quoteIdent(col.Name), quoteIdent(col.OwnerColumn))
 		if _, err := s.db.ExecContext(ctx, query, subj); err != nil {
 			return err
 		}
+		for _, id := range ids {
+			s.publish(realtime.Event{Type: "deleted", Collection: col.Name, ID: id}, subj)
+		}
 	}
 	return nil
+}
+
+// pkValuesForOwner returns the primary-key value of every row col has
+// with owner_id = subj, stringified — used only to name rows in realtime
+// "deleted" events ahead of a bulk DeleteOwned, since the bulk DELETE
+// itself doesn't return which rows it removed.
+func (s *Server) pkValuesForOwner(ctx context.Context, col *Collection, subj string) ([]string, error) {
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s = ?", quoteIdent(col.PKColumn), quoteIdent(col.Name), quoteIdent(col.OwnerColumn))
+	rows, err := s.db.QueryContext(ctx, query, subj)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var v any
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		ids = append(ids, fmt.Sprint(v))
+	}
+	return ids, rows.Err()
 }
 
 // --- helpers ---------------------------------------------------------------
