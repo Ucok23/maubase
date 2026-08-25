@@ -168,6 +168,20 @@ What's here now (v1, step 1 of the roadmap):
     swapped-in fresh `Discover`) is what makes that possible — the
     registry stopped being fixed-at-startup once this needed to change
     it at runtime.
+  - **Users** (`/admin/ui/users`, `viewer`+ to view, `developer`+ to
+    write): the customer-plane counterpart to Members — `internal/auth`'s
+    `users` table, the accounts `spec/identity.md` governs, viewable and
+    manageable the way Supabase's Auth › Users or Firebase's
+    Authentication tab work. Deliberately not part of the data browser,
+    since `users` is one of the reserved tables that's excluded there —
+    creating/deleting an account needs purpose-built handling (password
+    hashing, cascading delete, session revocation), not raw CRUD form
+    fields over a `password_hash` column. A `developer`+ owner can create
+    an account directly, force-delete one (the same cascade as that
+    customer's own `DELETE /api/auth/me`: owned rows, files, OAuth
+    grants, then the identity record itself — just admin-initiated), or
+    revoke all of an account's sessions without deleting it. Every one of
+    those is audit-logged.
   - **SQL Studio** (`/admin/ui/sql`, `owner`-only): unrestricted raw SQL
     against the whole database, including internal tables — meaningfully
     more dangerous than anything else here, so it's gated a tier above

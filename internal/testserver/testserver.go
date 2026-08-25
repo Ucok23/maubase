@@ -174,7 +174,7 @@ func newCustom(t *testing.T, opts Options) (string, error) {
 
 	auditLog := audit.New(sqlDB)
 
-	adminuiSvc := adminui.NewServer(sqlDB, authSvc, ownerSvc, restapiSvc, auditLog)
+	adminuiSvc := adminui.NewServer(sqlDB, authSvc, ownerSvc, restapiSvc, storageSvc, oauthSvc, auditLog)
 
 	httpSrv := &http.Server{Handler: server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, adminuiSvc, auditLog, opts.LoginRateLimit, opts.LoginRateWindow)}
 	go httpSrv.Serve(lis) //nolint:errcheck // Serve always returns non-nil; Close() below triggers it deliberately

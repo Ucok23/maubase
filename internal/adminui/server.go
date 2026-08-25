@@ -25,8 +25,10 @@ import (
 
 	"maubase/internal/audit"
 	"maubase/internal/auth"
+	"maubase/internal/oauth"
 	"maubase/internal/ownerauth"
 	"maubase/internal/restapi"
+	"maubase/internal/storage"
 )
 
 //go:embed templates/*.html
@@ -62,11 +64,17 @@ type Server struct {
 	auth      *auth.Service
 	ownerAuth *ownerauth.Service
 	restapi   *restapi.Server
+	storage   *storage.Server
+	oauth     *oauth.Server
 	audit     *audit.Log
 }
 
-func NewServer(db *sql.DB, authSvc *auth.Service, ownerAuthSvc *ownerauth.Service, restapiSvc *restapi.Server, auditLog *audit.Log) *Server {
-	return &Server{db: db, auth: authSvc, ownerAuth: ownerAuthSvc, restapi: restapiSvc, audit: auditLog}
+// storageSvc and oauthSvc are only needed for the Users panel's force-delete
+// (handleDeleteUser), which reproduces internal/server's own
+// DELETE /api/auth/me cascade — application data, storage, OAuth grants,
+// then the identity record itself. See spec/admin-ui.md ADMINUI-28.
+func NewServer(db *sql.DB, authSvc *auth.Service, ownerAuthSvc *ownerauth.Service, restapiSvc *restapi.Server, storageSvc *storage.Server, oauthSvc *oauth.Server, auditLog *audit.Log) *Server {
+	return &Server{db: db, auth: authSvc, ownerAuth: ownerAuthSvc, restapi: restapiSvc, storage: storageSvc, oauth: oauthSvc, audit: auditLog}
 }
 
 // Mount registers /admin/ui/* onto r.
@@ -87,6 +95,8 @@ func (s *Server) Mount(r chi.Router) {
 			r.Get("/", s.handleDashboard)
 			r.Get("/data", s.handleDataCollections)
 			r.Get("/data/{collection}", s.handleDataRows)
+			r.Get("/users", s.handleUsersPage)
+			r.Get("/users/{id}", s.handleUserDetail)
 		})
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireRole(ownerauth.RoleDeveloper))
@@ -94,6 +104,9 @@ func (s *Server) Mount(r chi.Router) {
 			r.Get("/data/{collection}/{id}/edit", s.handleDataEditForm)
 			r.Post("/data/{collection}/{id}", s.handleDataUpdate)
 			r.Post("/data/{collection}/{id}/delete", s.handleDataDelete)
+			r.Post("/users", s.handleCreateUser)
+			r.Post("/users/{id}/delete", s.handleDeleteUser)
+			r.Post("/users/{id}/revoke-sessions", s.handleRevokeUserSessions)
 			// Under /tables rather than nested in /data/{collection} so
 			// there's no ambiguity with an actual table literally named
 			// "new" — chi would resolve it fine either way (static
@@ -218,6 +231,145 @@ func (s *Server) handleDeleteOwner(w http.ResponseWriter, r *http.Request) {
 func (s *Server) renderOwnersWithError(w http.ResponseWriter, r *http.Request, actor *ownerauth.Owner, err error) {
 	owners, _ := s.ownerAuth.ListOwners(r.Context())
 	render(w, "owners", map[string]any{"Title": "Members", "Nav": "owners", "Owner": actor, "Owners": owners, "Error": err.Error()})
+}
+
+// --- users (customer-plane accounts) -------------------------------------
+//
+// The customer-plane counterpart to owners above: internal/auth's users
+// table, the same accounts spec/identity.md governs. Deliberately its own
+// panel rather than folded into the data browser — the users table is one
+// of the internal/reserved tables ADMINUI-11 excludes there, since account
+// creation/deletion needs purpose-built handling (password hashing,
+// cascading delete, session revocation), not raw CRUD form fields over a
+// password_hash column. See spec/admin-ui.md ADMINUI-25..30.
+
+func (s *Server) handleUsersPage(w http.ResponseWriter, r *http.Request) {
+	owner := ownerFromContext(r.Context())
+	limit, offset := parsePagination(r)
+	users, err := s.auth.ListUsers(r.Context(), limit, offset)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	total, err := s.auth.CountUsers(r.Context())
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	render(w, "users", map[string]any{
+		"Title": "Users", "Nav": "users", "Owner": owner,
+		"Users": users, "Limit": limit, "Offset": offset, "Total": total,
+		"CanWrite": owner.Role.AtLeast(ownerauth.RoleDeveloper),
+	})
+}
+
+func (s *Server) renderUsersWithError(w http.ResponseWriter, r *http.Request, owner *ownerauth.Owner, errMsg string) {
+	limit, offset := parsePagination(r)
+	users, _ := s.auth.ListUsers(r.Context(), limit, offset)
+	total, _ := s.auth.CountUsers(r.Context())
+	render(w, "users", map[string]any{
+		"Title": "Users", "Nav": "users", "Owner": owner,
+		"Users": users, "Limit": limit, "Offset": offset, "Total": total,
+		"CanWrite": owner.Role.AtLeast(ownerauth.RoleDeveloper), "Error": errMsg,
+	})
+}
+
+func (s *Server) handleUserDetail(w http.ResponseWriter, r *http.Request) {
+	owner := ownerFromContext(r.Context())
+	user, err := s.auth.GetUser(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	sessionCount, err := s.auth.CountActiveSessions(r.Context(), user.ID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	render(w, "user_detail", map[string]any{
+		"Title": user.Email, "Nav": "users", "Owner": owner,
+		"User": user, "SessionCount": sessionCount,
+		"CanWrite": owner.Role.AtLeast(ownerauth.RoleDeveloper),
+	})
+}
+
+// handleCreateUser creates a customer account directly from the admin UI,
+// under the same rules POST /api/auth/signup enforces (SignUp validates
+// email format, password length, and uniqueness) — but doesn't log the
+// admin in as the new user, since this is on someone else's behalf.
+// ADMINUI-27.
+func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	owner := ownerFromContext(r.Context())
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	created, err := s.auth.SignUp(r.Context(), r.FormValue("email"), r.FormValue("password"))
+	if err != nil {
+		s.renderUsersWithError(w, r, owner, err.Error())
+		return
+	}
+	_ = s.audit.Record(r.Context(), audit.EventUserCreate,
+		audit.Actor{ID: owner.ID, Email: owner.Email}, audit.Target{ID: created.ID, Email: created.Email}, nil)
+	http.Redirect(w, r, "/admin/ui/users", http.StatusSeeOther)
+}
+
+// handleDeleteUser force-deletes a customer account with exactly the same
+// consequences as that customer's own DELETE /api/auth/me
+// (internal/server's handleDeleteAccount): application data, uploaded
+// files, then outstanding OAuth grants, then the identity record itself
+// (which cascades to sessions and OAuth consents) — same order, for the
+// same reason (so a failure partway through is retryable, not
+// double-applied). The only difference is who initiated it, which the
+// audit entry below records. ADMINUI-28.
+func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	owner := ownerFromContext(r.Context())
+	id := chi.URLParam(r, "id")
+	user, err := s.auth.GetUser(r.Context(), id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if err := s.restapi.DeleteOwned(r.Context(), id); err != nil {
+		http.Error(w, "delete failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.storage.DeleteOwned(r.Context(), id); err != nil {
+		http.Error(w, "delete failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.oauth.RevokeAllForSubject(r.Context(), id); err != nil {
+		http.Error(w, "delete failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.auth.DeleteUser(r.Context(), id); err != nil {
+		http.Error(w, "delete failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_ = s.audit.Record(r.Context(), audit.EventUserDelete,
+		audit.Actor{ID: owner.ID, Email: owner.Email}, audit.Target{ID: user.ID, Email: user.Email}, nil)
+	http.Redirect(w, r, "/admin/ui/users", http.StatusSeeOther)
+}
+
+// handleRevokeUserSessions signs a customer account out everywhere ("sign
+// out everywhere") without deleting it — ADMINUI-29.
+func (s *Server) handleRevokeUserSessions(w http.ResponseWriter, r *http.Request) {
+	owner := ownerFromContext(r.Context())
+	id := chi.URLParam(r, "id")
+	user, err := s.auth.GetUser(r.Context(), id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	revoked, err := s.auth.RevokeAllSessions(r.Context(), id)
+	if err != nil {
+		http.Error(w, "revoke failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_ = s.audit.Record(r.Context(), audit.EventUserSessionsRevoked,
+		audit.Actor{ID: owner.ID, Email: owner.Email}, audit.Target{ID: user.ID, Email: user.Email},
+		map[string]any{"sessions_revoked": revoked})
+	http.Redirect(w, r, "/admin/ui/users/"+id, http.StatusSeeOther)
 }
 
 // --- audit log ------------------------------------------------------------

@@ -9,7 +9,7 @@ import (
 	"maubase/internal/testserver"
 )
 
-// Scenarios: spec/admin-ui.md (ADMINUI-01..15)
+// Scenarios: spec/admin-ui.md (ADMINUI-01..30)
 
 func adminUILogin(t *testing.T, client *http.Client, baseURL, email, password string) *http.Response {
 	t.Helper()
@@ -580,5 +580,238 @@ func TestAdminUI_SQLStudioAuditsEveryRun(t *testing.T) {
 	body := bodyString(t, resp)
 	if strings.Count(body, "sql_executed") < 2 {
 		t.Fatalf("want at least 2 sql_executed audit entries, got: %s", body)
+	}
+}
+
+// --- users (customer-plane accounts) --------------------------------------
+
+func TestAdminUI_UsersPageListsEveryAccount(t *testing.T) {
+	// ADMINUI-25
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	signUp(t, newClient(t), baseURL, "adminui-user1@example.com", "userpassword1")
+	signUp(t, newClient(t), baseURL, "adminui-user2@example.com", "userpassword1")
+
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	resp := doGetNoRedirect(t, owner, baseURL+"/admin/ui/users")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("users page: want 200, got %d", resp.StatusCode)
+	}
+	body := bodyString(t, resp)
+	if !strings.Contains(body, "adminui-user1@example.com") || !strings.Contains(body, "adminui-user2@example.com") {
+		t.Fatalf("want both customer accounts listed, got: %s", body)
+	}
+}
+
+func TestAdminUI_UserDetailShowsProfileAndSessionCount(t *testing.T) {
+	// ADMINUI-26
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	customer := newClient(t)
+	signUp(t, customer, baseURL, "adminui-detail@example.com", "userpassword1")
+	meResp, err := customer.Get(baseURL + "/api/auth/me")
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	me := decodeJSONMap(t, meResp)
+	id, _ := me["id"].(string)
+
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	resp := doGetNoRedirect(t, owner, baseURL+"/admin/ui/users/"+id)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("user detail: want 200, got %d", resp.StatusCode)
+	}
+	body := bodyString(t, resp)
+	if !strings.Contains(body, "adminui-detail@example.com") {
+		t.Fatalf("want the user's email shown, got: %s", body)
+	}
+	if !strings.Contains(body, "Active sessions") {
+		t.Fatalf("want an active-session count shown, got: %s", body)
+	}
+}
+
+func TestAdminUI_DeveloperCanCreateUserViewerCannot(t *testing.T) {
+	// ADMINUI-27
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	createOwner(t, owner, baseURL, "adminui-dev@example.com", "devpassword1", "developer")
+	createOwner(t, owner, baseURL, "adminui-viewer2@example.com", "viewerpassword1", "viewer")
+
+	dev := newClient(t)
+	adminUILogin(t, dev, baseURL, "adminui-dev@example.com", "devpassword1")
+	resp, err := dev.PostForm(baseURL+"/admin/ui/users", url.Values{
+		"email": {"adminui-created@example.com"}, "password": {"createdpassword1"},
+	})
+	if err != nil {
+		t.Fatalf("POST /admin/ui/users: %v", err)
+	}
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("developer create user: want 303, got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+	// The admin doing the creating must not be signed in as the new user.
+	for _, c := range resp.Cookies() {
+		if c.Name == "maubase_session" {
+			t.Fatalf("want no customer-plane session cookie set for the admin, got one")
+		}
+	}
+	list := doGetNoRedirect(t, dev, baseURL+"/admin/ui/users")
+	if !strings.Contains(bodyString(t, list), "adminui-created@example.com") {
+		t.Fatalf("want the created user listed afterward")
+	}
+	// The created account can sign in normally.
+	login := postJSON(t, newClient(t), baseURL+"/api/auth/login", map[string]string{
+		"email": "adminui-created@example.com", "password": "createdpassword1",
+	})
+	if login.StatusCode != http.StatusOK {
+		t.Fatalf("sign in as admin-created user: want 200, got %d", login.StatusCode)
+	}
+
+	viewer := newClient(t)
+	adminUILogin(t, viewer, baseURL, "adminui-viewer2@example.com", "viewerpassword1")
+	blocked, err := viewer.PostForm(baseURL+"/admin/ui/users", url.Values{
+		"email": {"adminui-blocked-user@example.com"}, "password": {"blockedpassword1"},
+	})
+	if err != nil {
+		t.Fatalf("POST /admin/ui/users (viewer): %v", err)
+	}
+	if blocked.StatusCode != http.StatusForbidden {
+		t.Fatalf("viewer create user: want 403, got %d", blocked.StatusCode)
+	}
+}
+
+func TestAdminUI_DeveloperCanForceDeleteUserViewerCannot(t *testing.T) {
+	// ADMINUI-28
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	createOwner(t, owner, baseURL, "adminui-dev2@example.com", "devpassword1", "developer")
+	createOwner(t, owner, baseURL, "adminui-viewer3@example.com", "viewerpassword1", "viewer")
+
+	customer := newClient(t)
+	signUp(t, customer, baseURL, "adminui-todelete@example.com", "userpassword1")
+	meResp, err := customer.Get(baseURL + "/api/auth/me")
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	me := decodeJSONMap(t, meResp)
+	id, _ := me["id"].(string)
+
+	viewer := newClient(t)
+	adminUILogin(t, viewer, baseURL, "adminui-viewer3@example.com", "viewerpassword1")
+	blocked, err := viewer.PostForm(baseURL+"/admin/ui/users/"+id+"/delete", nil)
+	if err != nil {
+		t.Fatalf("delete user (viewer): %v", err)
+	}
+	if blocked.StatusCode != http.StatusForbidden {
+		t.Fatalf("viewer force-delete: want 403, got %d", blocked.StatusCode)
+	}
+
+	dev := newClient(t)
+	adminUILogin(t, dev, baseURL, "adminui-dev2@example.com", "devpassword1")
+	resp, err := dev.PostForm(baseURL+"/admin/ui/users/"+id+"/delete", nil)
+	if err != nil {
+		t.Fatalf("delete user: %v", err)
+	}
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("developer force-delete: want 303, got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+
+	list := doGetNoRedirect(t, dev, baseURL+"/admin/ui/users")
+	if strings.Contains(bodyString(t, list), "adminui-todelete@example.com") {
+		t.Fatalf("want deleted user gone from the list")
+	}
+	// The deleted account's old credentials no longer work, and its
+	// session is gone (IDNT-10, reproduced by the admin-initiated path).
+	login := postJSON(t, newClient(t), baseURL+"/api/auth/login", map[string]string{
+		"email": "adminui-todelete@example.com", "password": "userpassword1",
+	})
+	if login.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("sign in as deleted user: want 401, got %d", login.StatusCode)
+	}
+	me2, err := customer.Get(baseURL + "/api/auth/me")
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	if me2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("deleted user's old session: want 401, got %d", me2.StatusCode)
+	}
+}
+
+func TestAdminUI_DeveloperCanRevokeUserSessionsWithoutDeleting(t *testing.T) {
+	// ADMINUI-29
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	createOwner(t, owner, baseURL, "adminui-dev3@example.com", "devpassword1", "developer")
+
+	customer := newClient(t)
+	signUp(t, customer, baseURL, "adminui-revoke@example.com", "userpassword1")
+	meResp, err := customer.Get(baseURL + "/api/auth/me")
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	me := decodeJSONMap(t, meResp)
+	id, _ := me["id"].(string)
+
+	dev := newClient(t)
+	adminUILogin(t, dev, baseURL, "adminui-dev3@example.com", "devpassword1")
+	resp, err := dev.PostForm(baseURL+"/admin/ui/users/"+id+"/revoke-sessions", nil)
+	if err != nil {
+		t.Fatalf("revoke sessions: %v", err)
+	}
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("revoke sessions: want 303, got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+
+	// The old session is dead...
+	me2, err := customer.Get(baseURL + "/api/auth/me")
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	if me2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("revoked session: want 401, got %d", me2.StatusCode)
+	}
+	// ...but the account itself still exists and can sign in again.
+	login := postJSON(t, newClient(t), baseURL+"/api/auth/login", map[string]string{
+		"email": "adminui-revoke@example.com", "password": "userpassword1",
+	})
+	if login.StatusCode != http.StatusOK {
+		t.Fatalf("sign in after revoke: want 200, got %d", login.StatusCode)
+	}
+}
+
+func TestAdminUI_UserActionsAreAudited(t *testing.T) {
+	// ADMINUI-30
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	owner.PostForm(baseURL+"/admin/ui/users", url.Values{
+		"email": {"adminui-audited@example.com"}, "password": {"auditedpassword1"},
+	})
+	customer := newClient(t)
+	loginResp := postJSON(t, customer, baseURL+"/api/auth/login", map[string]string{
+		"email": "adminui-audited@example.com", "password": "auditedpassword1",
+	})
+	if loginResp.StatusCode != http.StatusOK {
+		t.Fatalf("sign in as created user: want 200, got %d", loginResp.StatusCode)
+	}
+	meResp, err := customer.Get(baseURL + "/api/auth/me")
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	me := decodeJSONMap(t, meResp)
+	id, _ := me["id"].(string)
+
+	owner.PostForm(baseURL+"/admin/ui/users/"+id+"/revoke-sessions", nil)
+	owner.PostForm(baseURL+"/admin/ui/users/"+id+"/delete", nil)
+
+	resp := doGetNoRedirect(t, owner, baseURL+"/admin/ui/audit-log")
+	body := bodyString(t, resp)
+	for _, event := range []string{"user_create", "user_sessions_revoked", "user_delete"} {
+		if !strings.Contains(body, event) {
+			t.Fatalf("want %q in audit log, got: %s", event, body)
+		}
 	}
 }

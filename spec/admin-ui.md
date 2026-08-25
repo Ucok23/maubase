@@ -70,6 +70,80 @@ attempted,
 then it's refused (mirrors `spec/owner-plane.md`'s `ErrLastOwner`
 behavior) and the account still exists afterward.
 
+## Users (`/admin/ui/users`, viewer+ to view, developer+ to create/delete/revoke)
+
+The customer-plane counterpart to Owners: `internal/auth`'s `users` table,
+the same accounts `spec/identity.md` governs (signup/login/sessions) —
+never to be confused with the owner-plane accounts on `/admin/ui/owners`,
+which administer the deployment itself. It's also distinct from
+`/admin/ui/data`: the `users` table is deliberately excluded from the
+generic data browser (ADMINUI-11) since customer accounts need
+purpose-built handling — password hashing on create, cascading delete,
+session revocation — rather than raw CRUD form fields over a
+`password_hash` column. This is the panel Supabase's Auth › Users and
+Firebase's Authentication › Users tab are the equivalent of.
+
+## ADMINUI-25: The users page lists every customer account, paginated
+Given one or more customer accounts (`internal/auth` users,
+spec/identity.md),
+when a viewer+ owner visits `/admin/ui/users`,
+then every account's id, email, and created_at appear, newest first,
+paginated the same way the data browser and audit log already are.
+
+## ADMINUI-26: A user's detail view shows their profile and session count
+Given a customer account,
+when a viewer+ owner visits `/admin/ui/users/{id}`,
+then their id, email, created_at, updated_at, and current active session
+count are shown, alongside the delete and revoke-sessions controls gated
+per ADMINUI-28/29.
+
+## ADMINUI-27: A developer+ owner can create a customer account directly from the UI
+Given the users page's create-user form (email + password),
+when a developer+ owner submits it,
+then a new customer account is created under the same rules
+`POST /api/auth/signup` enforces — password at least 8 characters
+(IDNT-03), email not already registered (IDNT-02) — except no session
+cookie is set for the admin doing the creating, since this creates an
+account on someone else's behalf rather than signing the admin in as
+them. It appears in the users list afterward and the given credentials
+can sign in normally at `/api/auth/login`.
+When a viewer-role owner submits the same form directly (bypassing the
+UI), the response is `403` and no account is created.
+
+## ADMINUI-28: A developer+ owner can force-delete a customer account
+Given the users page's delete control for an account,
+when a developer+ owner submits it,
+then the account is deleted with exactly the same consequences as that
+customer's own `DELETE /api/auth/me` (IDNT-10/11/13): none of their
+sessions authenticate anything afterward, any outstanding OAuth access
+token issued on their behalf stops working, and every row they owned in
+every owner-scoped auto-REST collection is gone. The only differences
+from the self-service path are who initiated it and that it's
+audit-logged with the admin as actor (ADMINUI-30) rather than the user
+themselves.
+When a viewer-role owner attempts the same directly, `403` and no
+account is deleted.
+
+## ADMINUI-29: A developer+ owner can revoke a customer account's sessions without deleting it
+Given a customer account with one or more active sessions,
+when a developer+ owner submits the "sign out everywhere" control for
+that account,
+then every session belonging to that account is revoked immediately —
+subsequent requests using any of those session tokens get `401`, the
+same guarantee IDNT-08 makes for a user's own logout — and the account
+itself still exists and can sign in again afterward to get a fresh
+session.
+
+## ADMINUI-30: Every user-management action is recorded to the audit log
+Given the users page,
+when a developer+ owner creates a customer account, force-deletes one, or
+revokes its sessions,
+then a corresponding audit-log entry is recorded (`user_create`,
+`user_delete`, or `user_sessions_revoked`) naming the admin as actor and
+the affected customer account as target (id, email) — the same
+accountability pattern every other mutating action in this admin UI
+already follows (OWNR-14/15, ADMINUI-20).
+
 ## Audit log (`/admin/ui/audit-log`, admin+)
 
 ## ADMINUI-09: The audit log page lists entries newest-first, paginated

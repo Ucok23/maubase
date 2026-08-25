@@ -1,0 +1,37 @@
+{{define "users"}}{{template "header" .}}
+{{if .Error}}<div class="alert">{{.Error}}</div>{{end}}
+<p class="meta-line">{{.Total}} total</p>
+
+{{if .Users}}
+<div class="table-wrap">
+<table class="data-table">
+<thead><tr><th>Email</th><th>Created</th><th></th></tr></thead>
+<tbody>
+{{range .Users}}
+<tr>
+<td style="font-family:var(--font)"><a href="/admin/ui/users/{{.ID}}">{{.Email}}</a></td>
+<td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+<td class="actions"><a href="/admin/ui/users/{{.ID}}" class="btn btn-outline btn-sm">View</a></td>
+</tr>
+{{end}}
+</tbody>
+</table>
+</div>
+{{else}}
+<div class="empty-state">No users yet.</div>
+{{end}}
+
+<nav class="pagination">
+{{if gt .Offset 0}}<a class="btn btn-outline btn-sm" href="?limit={{.Limit}}&offset={{sub .Offset .Limit}}">← Newer</a>{{end}}
+{{if lt (add .Offset .Limit) .Total}}<a class="btn btn-outline btn-sm" href="?limit={{.Limit}}&offset={{add .Offset .Limit}}">Older →</a>{{end}}
+</nav>
+
+{{if .CanWrite}}
+<h2>Create a user</h2>
+<form method="POST" action="/admin/ui/users" class="form-card">
+<div class="field"><label>Email</label><input type="email" name="email" required></div>
+<div class="field"><label>Password</label><input type="password" name="password" required></div>
+<button type="submit" class="btn btn-primary">Create user</button>
+</form>
+{{end}}
+{{template "footer" .}}{{end}}
