@@ -1,0 +1,52 @@
+# Maintenance: session cleanup and login rate-limiting
+
+Operational hygiene that isn't identity or owner-plane behavior on its
+own, but touches both planes: expired session rows eventually get purged,
+and login endpoints on both planes are throttled per client IP.
+
+## Session cleanup
+
+Expired sessions already fail authentication on their own (see IDNT-*'s
+and OWNR-*'s expiry handling) — purging them is pure storage hygiene, not
+something that changes what a valid or expired token can do. A background
+job does this automatically and periodically; the scenarios below cover
+the on-demand trigger, since that's the part with externally observable
+behavior.
+
+## MAINT-01: Purging sessions requires admin role
+Given a signed-in owner-plane session,
+when they `POST /admin/maintenance/purge-sessions`,
+then a `viewer` or `developer` session gets `403 Forbidden`, an `admin` or
+`owner` session gets `200`, and no session/bearer token at all gets `401`.
+
+## MAINT-02: Purging sessions never touches a still-valid session
+Given a signed-in customer-plane user and a signed-in owner-plane admin,
+when the admin calls `POST /admin/maintenance/purge-sessions`,
+then the response is `200` with counts of how many rows were removed,
+and afterward the customer's session still authenticates `GET
+/api/auth/me` (its `expires_at` hasn't passed, so it isn't touched) —
+purging removes only rows whose expiry has already passed.
+
+## MAINT-03: Purging sessions is audit logged
+Given a signed-in owner-plane admin,
+when they `POST /admin/maintenance/purge-sessions`,
+then a `sessions_purged` entry appears in `GET /admin/audit-log` with
+that admin as actor.
+
+## Login rate-limiting
+
+`POST /api/auth/login` and `POST /admin/auth/login` each throttle repeated
+attempts from the same client IP, regardless of whether an individual
+attempt succeeds or fails — the point is bounding brute-force credential
+guessing, not just counting failures. Every deployment ships with a
+default limit; see the README for how to tune it.
+
+## MAINT-04: Excess login attempts are rejected
+Given a login endpoint (customer or owner plane) configured with a
+request limit over a window,
+when a client sends more than that many `POST` requests to it within one
+window,
+then the requests within the limit get their normal response (`200` or
+`401`, whichever the credentials warrant), and requests beyond the limit
+get `429 Too Many Requests` with a `Retry-After` header, until the window
+resets.

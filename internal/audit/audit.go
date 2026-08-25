@@ -24,11 +24,12 @@ import (
 // rather than free-form strings, so a typo in a caller can't silently
 // create an unrecognized event.
 const (
-	EventLogin       = "login"
-	EventLoginFailed = "login_failed"
-	EventLogout      = "logout"
-	EventOwnerCreate = "owner_create"
-	EventOwnerDelete = "owner_delete"
+	EventLogin          = "login"
+	EventLoginFailed    = "login_failed"
+	EventLogout         = "logout"
+	EventOwnerCreate    = "owner_create"
+	EventOwnerDelete    = "owner_delete"
+	EventSessionsPurged = "sessions_purged"
 )
 
 // Actor identifies who performed an action. A failed login has no known

@@ -84,6 +84,17 @@ What's here now (v1, step 1 of the roadmap):
     filtering beyond pagination, single fixed owner-column convention
     (`owner_id`) rather than per-table config.
 
+- Session cleanup and login rate-limiting (`internal/ratelimit`,
+  `spec/maintenance.md`): a background janitor periodically purges
+  expired rows from the customer- and owner-plane session tables — pure
+  storage hygiene, since an expired session already fails authentication
+  on its own — and is also reachable on demand via `POST
+  /admin/maintenance/purge-sessions` (admin+, audit logged). Separately,
+  `POST /api/auth/login` and `POST /admin/auth/login` each throttle
+  repeated attempts from the same client IP (`429` + `Retry-After` past
+  the limit), counting every attempt, not just failures, so it actually
+  bounds brute-force credential guessing.
+
 ## Not yet built (see roadmap)
 
 - Row-level access rules beyond the owner_id convention (e.g. custom
@@ -91,8 +102,6 @@ What's here now (v1, step 1 of the roadmap):
 - Realtime subscriptions.
 - File storage.
 - Embedded admin UI (would sit on top of the owner plane above).
-- Session/token cleanup (expired rows are never purged) and login
-  rate-limiting.
 
 ## Compliance posture
 
@@ -149,6 +158,11 @@ Config via env vars (see `internal/config`):
   run after (see the owner plane section below)
 - `BAAS_MIGRATIONS_DIR` (default `migrations`) — where a deployment's own
   application-schema `.sql` files live; see the auto-REST section below
+- `BAAS_LOGIN_RATE_LIMIT` (default `10`) / `BAAS_LOGIN_RATE_WINDOW_SECONDS`
+  (default `60`) — at most this many `POST /api/auth/login` or `POST
+  /admin/auth/login` attempts per client IP per window
+- `BAAS_SESSION_CLEANUP_INTERVAL_SECONDS` (default `3600`) — how often the
+  background janitor purges expired session rows
 
 ## Testing
 

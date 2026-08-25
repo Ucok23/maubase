@@ -133,6 +133,18 @@ func (s *Service) Logout(ctx context.Context, rawToken string) error {
 	return nil
 }
 
+// PurgeExpiredSessions deletes every owner_sessions row whose expires_at
+// has already passed, and reports how many were removed. See
+// auth.Service.PurgeExpiredSessions's doc for why this is pure storage
+// hygiene rather than user-visible behavior.
+func (s *Service) PurgeExpiredSessions(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM owner_sessions WHERE expires_at <= ?`, time.Now())
+	if err != nil {
+		return 0, fmt.Errorf("purge expired owner sessions: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 func (s *Service) GetOwner(ctx context.Context, id string) (*Owner, error) {
 	var o Owner
 	var role string

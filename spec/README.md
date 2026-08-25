@@ -23,3 +23,4 @@ and so a spec change makes it easy to find what needs re-verifying.
 - [oauth-token.md](oauth-token.md) — exchanging a code for tokens
 - [oauth-resource-access.md](oauth-resource-access.md) — using an access token
 - [oauth-discovery.md](oauth-discovery.md) — well-known endpoints
+- [maintenance.md](maintenance.md) — session cleanup and login rate-limiting
