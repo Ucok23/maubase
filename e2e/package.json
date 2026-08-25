@@ -1,0 +1,14 @@
+{
+  "name": "maubase-e2e",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Playwright browser e2e suite for maubase's embedded admin UI — separate from the Go test suite in /test, which never opens a real browser.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0"
+  }
+}

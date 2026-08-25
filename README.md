@@ -280,6 +280,15 @@ make test
 When behavior needs to change, update the spec first, then the code, then
 watch the test go from red to green — not the other way around.
 
+[`e2e/`](e2e/) is a separate, small Playwright suite that drives the
+embedded admin UI in a real browser and records the run — screenshots per
+step plus a video — since that's the one surface here with an actual UI to
+look at; `test/` never opens a browser. See `e2e/README.md`.
+
+```sh
+cd e2e && npm install && npx playwright install chromium && npm test
+```
+
 ## Try the auth flow
 
 ```sh
