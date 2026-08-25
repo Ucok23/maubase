@@ -17,11 +17,13 @@ import (
 	"maubase/internal/audit"
 	"maubase/internal/auth"
 	"maubase/internal/db"
+	"maubase/internal/email"
 	"maubase/internal/oauth"
 	"maubase/internal/ownerauth"
 	"maubase/internal/realtime"
 	"maubase/internal/restapi"
 	"maubase/internal/server"
+	"maubase/internal/social"
 	"maubase/internal/storage"
 )
 
@@ -53,6 +55,29 @@ type Options struct {
 	// internal/storage). Zero means "use the same 25MB default as
 	// config.Load".
 	MaxUploadBytes int64
+
+	// EmailSender backs POST /api/auth/forgot-password. Nil defaults to
+	// a fresh email.NewFakeSender() — a test that wants to inspect what
+	// was "sent" (the reset link, notably) should construct its own
+	// *email.FakeSender, pass it here, and keep the pointer to call
+	// .Sent() on later.
+	EmailSender email.Sender
+	// PasswordResetURL defaults to a placeholder frontend URL if empty —
+	// only the tests actually asserting on the emailed link's shape need
+	// to set this themselves.
+	PasswordResetURL string
+
+	// SocialProviders backs GET /api/auth/social/{provider}[/callback] —
+	// nil/empty means no provider is configured (every provider 404s),
+	// the default for any test not exercising social login. A test that
+	// does should build its own social.Provider(s) pointed at a local
+	// httptest.Server standing in for Google/GitHub (see
+	// social.NewGoogle/NewGitHub, which take every endpoint URL
+	// explicitly for exactly this) rather than the real thing.
+	SocialProviders map[string]social.Provider
+	// SocialLoginRedirect defaults to a placeholder frontend URL if
+	// empty, same reasoning as PasswordResetURL.
+	SocialLoginRedirect string
 
 	// Relay, if set, builds this server's realtime.Broker with
 	// realtime.NewBrokerWithRelay instead of realtime.NewBroker — for
@@ -197,7 +222,20 @@ func newCustom(t *testing.T, opts Options) (string, error) {
 
 	adminuiSvc := adminui.NewServer(sqlDB, authSvc, ownerSvc, restapiSvc, storageSvc, oauthSvc, auditLog)
 
-	httpSrv := &http.Server{Handler: server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, adminuiSvc, auditLog, opts.LoginRateLimit, opts.LoginRateWindow)}
+	emailSender := opts.EmailSender
+	if emailSender == nil {
+		emailSender = email.NewFakeSender()
+	}
+	passwordResetURL := opts.PasswordResetURL
+	if passwordResetURL == "" {
+		passwordResetURL = "http://localhost:3000/reset-password"
+	}
+	socialLoginRedirect := opts.SocialLoginRedirect
+	if socialLoginRedirect == "" {
+		socialLoginRedirect = "http://localhost:3000/welcome"
+	}
+
+	httpSrv := &http.Server{Handler: server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, adminuiSvc, auditLog, opts.LoginRateLimit, opts.LoginRateWindow, emailSender, passwordResetURL, opts.SocialProviders, socialLoginRedirect)}
 	go httpSrv.Serve(lis) //nolint:errcheck // Serve always returns non-nil; Close() below triggers it deliberately
 	t.Cleanup(func() { httpSrv.Close() })
 

@@ -266,6 +266,16 @@ Config via env vars (see `internal/config`):
   are written, one file per upload
 - `MAUBASE_MAX_UPLOAD_MB` (default `25`) — largest single file upload
   accepted; a bigger request body is rejected before it's fully read
+- `MAUBASE_RESEND_API_KEY` / `MAUBASE_EMAIL_FROM` / `MAUBASE_PASSWORD_RESET_URL`
+  — password reset (see below); all three unset is a valid, common state
+  (a deployment that never uses it doesn't need any of them) and gets
+  `internal/email.NoopSender`, which fails loudly the first time
+  something actually tries to send rather than silently dropping the
+  email
+- `MAUBASE_GOOGLE_CLIENT_ID` / `_SECRET`, `MAUBASE_GITHUB_CLIENT_ID` / `_SECRET`,
+  `MAUBASE_SOCIAL_LOGIN_REDIRECT_URL` — social login (see below); each
+  provider is independently optional (unset client id/secret just means
+  that one 404s — see `spec/social-login.md` SOCIAL-05)
 - `MAUBASE_REDIS_URL` (default unset) — set to a `redis://` connection
   string shared by every instance to upgrade realtime fan-out from
   single-process to cross-process; see "Realtime scaling" below
@@ -290,6 +300,34 @@ never adds latency to, or fails, the write path that triggered it), and
 is additionally relayed over Redis pub/sub so every other process
 sharing that Redis delivers it to its own subscribers too. See
 `spec/realtime.md` RT-09 and `test/realtime_relay_test.go`.
+
+## Password reset
+
+`POST /api/auth/forgot-password` (`{"email": "..."}`, always `204`,
+whether or not that email is registered — never revealing which) emails a
+reset link built from `MAUBASE_PASSWORD_RESET_URL` (your own frontend's
+page, not something maubase renders) with a one-hour, single-use token
+appended as `?token=`. `POST /api/auth/reset-password`
+(`{"token": "...", "password": "..."}`) redeems it: sets the new
+password and signs the account out everywhere, including whatever
+session requested the reset. Delivery is via `internal/email.Sender` —
+Resend (`internal/email.ResendSender`) when both `MAUBASE_RESEND_API_KEY`
+and `MAUBASE_EMAIL_FROM` are set. See `spec/password-reset.md`.
+
+## Social login
+
+`GET /api/auth/social/{provider}` (`google` or `github`) redirects to
+that provider's own sign-in page; `GET
+/api/auth/social/{provider}/callback` is where it sends the browser
+back to — on success this sets the same identity-layer session cookie
+`POST /api/auth/login` does and redirects to
+`MAUBASE_SOCIAL_LOGIN_REDIRECT_URL` (your own frontend, not a maubase
+page). A first-time identity creates an account (linking to an existing
+one by email if there's a match, rather than duplicating it); a
+returning one just signs in. `internal/social` is maubase acting as an
+OAuth *client* to Google/GitHub — the opposite direction from
+`internal/oauth`, which is maubase acting as an OAuth *authorization
+server* for third-party apps. See `spec/social-login.md`.
 
 ## Testing
 

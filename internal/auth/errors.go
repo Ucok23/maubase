@@ -8,4 +8,5 @@ var (
 	ErrSessionNotFound    = errors.New("session not found or expired")
 	ErrWeakPassword       = errors.New("password must be at least 8 characters")
 	ErrInvalidEmail       = errors.New("invalid email address")
+	ErrResetTokenInvalid  = errors.New("invalid or expired reset token")
 )

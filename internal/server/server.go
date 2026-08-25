@@ -13,11 +13,13 @@ import (
 	"maubase/internal/adminui"
 	"maubase/internal/audit"
 	"maubase/internal/auth"
+	"maubase/internal/email"
 	"maubase/internal/oauth"
 	"maubase/internal/ownerauth"
 	"maubase/internal/ratelimit"
 	"maubase/internal/realtime"
 	"maubase/internal/restapi"
+	"maubase/internal/social"
 	"maubase/internal/storage"
 )
 
@@ -33,16 +35,37 @@ type Server struct {
 	router    chi.Router
 
 	loginLimiter *ratelimit.Limiter
+
+	email            email.Sender
+	passwordResetURL string
+
+	// socialProviders is keyed by name ("google", "github"); a provider
+	// missing from the map (its client id/secret weren't configured)
+	// makes GET /api/auth/social/{provider} 404, same as naming a
+	// provider that doesn't exist at all — see spec/social-login.md.
+	socialProviders     map[string]social.Provider
+	socialLoginRedirect string
 }
 
 // New wires the full HTTP API. loginRateLimit/Window configure the
 // throttle on the login endpoints (see internal/ratelimit); pass 0 for
 // loginRateLimit to disable it (unlimited attempts) — useful for tests
 // that aren't exercising rate-limiting and don't want to think about it.
-func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.Service, restapiSvc *restapi.Server, storageSvc *storage.Server, realtimeSvc *realtime.Server, adminuiSvc *adminui.Server, auditLog *audit.Log, loginRateLimit int, loginRateWindow time.Duration) *Server {
+// emailSender/passwordResetURL back POST /api/auth/forgot-password — see
+// spec/password-reset.md; emailSender is typically email.NoopSender{}
+// (from config.Load, when MAUBASE_RESEND_API_KEY/EMAIL_FROM aren't set)
+// or email.NewFakeSender() in tests that need to inspect what was "sent".
+// socialProviders/socialLoginRedirect back "Continue with <provider>" —
+// see spec/social-login.md; an empty/nil map is fine, it just means no
+// provider is offered.
+func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.Service, restapiSvc *restapi.Server, storageSvc *storage.Server, realtimeSvc *realtime.Server, adminuiSvc *adminui.Server, auditLog *audit.Log, loginRateLimit int, loginRateWindow time.Duration, emailSender email.Sender, passwordResetURL string, socialProviders map[string]social.Provider, socialLoginRedirect string) *Server {
 	s := &Server{
 		auth: authSvc, oauth: oauthSvc, ownerAuth: ownerAuthSvc, restapi: restapiSvc, storage: storageSvc, realtime: realtimeSvc, adminui: adminuiSvc, audit: auditLog,
-		loginLimiter: ratelimit.New(loginRateLimit, loginRateWindow),
+		loginLimiter:        ratelimit.New(loginRateLimit, loginRateWindow),
+		email:               emailSender,
+		passwordResetURL:    passwordResetURL,
+		socialProviders:     socialProviders,
+		socialLoginRedirect: socialLoginRedirect,
 	}
 
 	r := chi.NewRouter()
@@ -55,6 +78,15 @@ func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.
 		r.Post("/signup", s.handleSignUp)
 		r.With(s.rateLimitLogin).Post("/login", s.handleLogin)
 		r.Post("/logout", s.handleLogout)
+		// Shares loginLimiter's per-IP budget rather than a separate one:
+		// both are "someone repeatedly hitting an auth endpoint for this
+		// email/IP" abuse, and forgot-password is the more attractive
+		// target for outright email-bombing a victim, so it deserves the
+		// same throttle at minimum, not a looser one of its own.
+		r.With(s.rateLimitLogin).Post("/forgot-password", s.handleForgotPassword)
+		r.Post("/reset-password", s.handleResetPassword)
+		r.Get("/social/{provider}", s.handleSocialStart)
+		r.Get("/social/{provider}/callback", s.handleSocialCallback)
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAuth)
 			r.Get("/me", s.handleMe)

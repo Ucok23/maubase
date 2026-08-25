@@ -18,11 +18,13 @@ import (
 	"maubase/internal/auth"
 	"maubase/internal/config"
 	"maubase/internal/db"
+	"maubase/internal/email"
 	"maubase/internal/oauth"
 	"maubase/internal/ownerauth"
 	"maubase/internal/realtime"
 	"maubase/internal/restapi"
 	"maubase/internal/server"
+	"maubase/internal/social"
 	"maubase/internal/storage"
 )
 
@@ -90,7 +92,25 @@ func run() error {
 
 	adminuiSvc := adminui.NewServer(sqlDB, authSvc, ownerSvc, restapiSvc, storageSvc, oauthSvc, auditLog)
 
-	srv := server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, adminuiSvc, auditLog, cfg.LoginRateLimit, cfg.LoginRateWindow)
+	// Falls back to a sender that fails loudly rather than silently
+	// no-op'ing when Resend isn't configured — see email.NoopSender.
+	var emailSender email.Sender = email.NoopSender{}
+	if cfg.ResendAPIKey != "" && cfg.EmailFrom != "" {
+		emailSender = email.NewResendSender(cfg.ResendAPIKey, cfg.EmailFrom)
+	}
+
+	// Each provider only goes in the map if its client id/secret are
+	// both set — an unconfigured provider 404s rather than the server
+	// refusing to start over it (see spec/social-login.md).
+	socialProviders := map[string]social.Provider{}
+	if cfg.GoogleClientID != "" && cfg.GoogleClientSecret != "" {
+		socialProviders["google"] = social.Google(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.Issuer+"/api/auth/social/google/callback")
+	}
+	if cfg.GitHubClientID != "" && cfg.GitHubClientSecret != "" {
+		socialProviders["github"] = social.GitHub(cfg.GitHubClientID, cfg.GitHubClientSecret, cfg.Issuer+"/api/auth/social/github/callback")
+	}
+
+	srv := server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, adminuiSvc, auditLog, cfg.LoginRateLimit, cfg.LoginRateWindow, emailSender, cfg.PasswordResetURL, socialProviders, cfg.SocialLoginRedirectURL)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,

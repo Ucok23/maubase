@@ -50,6 +50,38 @@ type Config struct {
 	// body is rejected before it's fully read. See internal/storage.
 	MaxUploadBytes int64
 
+	// ResendAPIKey/EmailFrom configure outgoing transactional email (see
+	// internal/email). Both empty is a valid, common state — a
+	// deployment that never uses password reset doesn't need either —
+	// and gets internal/email.NoopSender, which fails clearly the first
+	// time something actually tries to send.
+	ResendAPIKey string
+	EmailFrom    string
+	// PasswordResetURL is the deployment's own frontend page that
+	// receives a password-reset link — maubase only issues/validates the
+	// token (POST /api/auth/forgot-password, POST /api/auth/reset-password);
+	// the page a human actually lands on and enters a new password into
+	// is the deployer's own app, not something this server renders.
+	// CreateResetToken's raw token is appended as ?token=.
+	PasswordResetURL string
+
+	// GoogleClientID/Secret and GitHubClientID/Secret enable "Continue
+	// with <provider>" (see internal/social, spec/social-login.md) —
+	// each pair empty means that provider simply isn't offered
+	// (GET /api/auth/social/{provider} 404s), not a startup error. Get
+	// these from Google Cloud Console / a GitHub OAuth App, with the
+	// redirect URI set to {Issuer}/api/auth/social/{provider}/callback.
+	GoogleClientID     string
+	GoogleClientSecret string
+	GitHubClientID     string
+	GitHubClientSecret string
+	// SocialLoginRedirectURL is the deployment's own frontend page a
+	// successful social sign-in lands on afterward (the session cookie
+	// is already set by then) — same reasoning as PasswordResetURL:
+	// maubase issues the session, it doesn't render a page for a human
+	// to look at next.
+	SocialLoginRedirectURL string
+
 	// RedisURL, if set, upgrades realtime fan-out from single-process
 	// (the default — see internal/realtime's package doc) to
 	// cross-process via Redis pub/sub (internal/realtime.RedisRelay) —
@@ -72,6 +104,14 @@ func Load() Config {
 		SessionCleanupInterval: getEnvSeconds("MAUBASE_SESSION_CLEANUP_INTERVAL_SECONDS", time.Hour),
 		StorageDir:             getEnv("MAUBASE_STORAGE_DIR", "data/storage"),
 		MaxUploadBytes:         int64(getEnvInt("MAUBASE_MAX_UPLOAD_MB", 25)) * 1024 * 1024,
+		ResendAPIKey:           getEnv("MAUBASE_RESEND_API_KEY", ""),
+		EmailFrom:              getEnv("MAUBASE_EMAIL_FROM", ""),
+		PasswordResetURL:       getEnv("MAUBASE_PASSWORD_RESET_URL", ""),
+		GoogleClientID:         getEnv("MAUBASE_GOOGLE_CLIENT_ID", ""),
+		GoogleClientSecret:     getEnv("MAUBASE_GOOGLE_CLIENT_SECRET", ""),
+		GitHubClientID:         getEnv("MAUBASE_GITHUB_CLIENT_ID", ""),
+		GitHubClientSecret:     getEnv("MAUBASE_GITHUB_CLIENT_SECRET", ""),
+		SocialLoginRedirectURL: getEnv("MAUBASE_SOCIAL_LOGIN_REDIRECT_URL", ""),
 		RedisURL:               getEnv("MAUBASE_REDIS_URL", ""),
 	}
 }

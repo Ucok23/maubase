@@ -50,6 +50,27 @@ var tmpl = template.Must(template.New("").Funcs(template.FuncMap{
 	"atLeast": func(role ownerauth.Role, min string) bool {
 		return role.AtLeast(ownerauth.Role(min))
 	},
+	// isNull backs the data browser's NULL-vs-empty-string distinction:
+	// a SQL NULL scans into a map[string]any as a literal Go nil, which
+	// {{.}} alone can't be told apart from "" without this — see
+	// templates/partials.html's "data_row" partial and .null-cell in
+	// admin.css.
+	"isNull": func(v any) bool { return v == nil },
+	// inputType picks a type="number" input for an INTEGER/REAL column
+	// so the data browser's create/edit forms aren't every field being
+	// a bare type="text" box regardless of what it actually holds.
+	// col.DeclType is one of restapi.AdminAllowedColumnTypes
+	// ("TEXT"/"INTEGER"/"REAL") for anything created through this UI,
+	// but a migration-defined table can declare arbitrary SQLite type
+	// names, so this matches loosely (substring, case-insensitive)
+	// rather than an exact set.
+	"inputType": func(declType string) string {
+		t := strings.ToUpper(declType)
+		if strings.Contains(t, "INT") || strings.Contains(t, "REAL") || strings.Contains(t, "FLOA") || strings.Contains(t, "DOUB") {
+			return "number"
+		}
+		return "text"
+	},
 	// dict builds a map from alternating key/value arguments, for
 	// passing more than one value into a {{template}} call (which only
 	// takes a single pipeline) — used to hand column_row both the row
@@ -105,6 +126,9 @@ func (s *Server) Mount(r chi.Router) {
 			r.Get("/", s.handleDashboard)
 			r.Get("/data", s.handleDataCollections)
 			r.Get("/data/{collection}", s.handleDataRows)
+			// Returns just the <tr> fragment htmx swaps back in after an
+			// inline edit is saved or canceled — see handleDataEditRowFragment.
+			r.Get("/data/{collection}/{id}/row", s.handleDataRowFragment)
 			r.Get("/users", s.handleUsersPage)
 			r.Get("/users/{id}", s.handleUserDetail)
 		})
@@ -112,6 +136,7 @@ func (s *Server) Mount(r chi.Router) {
 			r.Use(s.requireRole(ownerauth.RoleDeveloper))
 			r.Post("/data/{collection}", s.handleDataCreate)
 			r.Get("/data/{collection}/{id}/edit", s.handleDataEditForm)
+			r.Get("/data/{collection}/{id}/edit-row", s.handleDataEditRowFragment)
 			r.Post("/data/{collection}/{id}", s.handleDataUpdate)
 			r.Post("/data/{collection}/{id}/delete", s.handleDataDelete)
 			r.Post("/users", s.handleCreateUser)
@@ -447,7 +472,8 @@ func (s *Server) handleDataRows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, offset := parsePagination(r)
-	rows, err := s.restapi.AdminListRows(r.Context(), col, limit, offset)
+	sortCol, sortDir := r.URL.Query().Get("sort"), r.URL.Query().Get("dir")
+	rows, err := s.restapi.AdminListRows(r.Context(), col, limit, offset, sortCol, sortDir)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -460,7 +486,53 @@ func (s *Server) handleDataRows(w http.ResponseWriter, r *http.Request) {
 	render(w, "data_rows", map[string]any{
 		"Title": col.Name, "Nav": "data", "Owner": owner, "Collection": col,
 		"Rows": rows, "Limit": limit, "Offset": offset, "Total": total,
+		"Sort": sortCol, "Dir": sortDir,
 		"CanWrite": owner.Role.AtLeast(ownerauth.RoleDeveloper),
+	})
+}
+
+// handleDataRowFragment returns just the <tr> fragment for one row, at
+// its normal (non-editing) display state — what an inline edit's Cancel
+// button swaps back to, and what a successful Save also renders (see
+// handleDataUpdate) via the same "data_row" partial the full list page
+// uses, so there's exactly one place that markup is defined.
+func (s *Server) handleDataRowFragment(w http.ResponseWriter, r *http.Request) {
+	owner := ownerFromContext(r.Context())
+	col, ok := s.restapi.AdminCollection(chi.URLParam(r, "collection"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	row, err := s.restapi.AdminGetRow(r.Context(), col, chi.URLParam(r, "id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = tmpl.ExecuteTemplate(w, "data_row", map[string]any{
+		"Collection": col, "Row": row, "CanWrite": owner.Role.AtLeast(ownerauth.RoleDeveloper),
+	})
+}
+
+// handleDataEditRowFragment returns the inline-editable <tr> fragment
+// htmx swaps in when "Edit" is clicked (ADMINUI-13's write capability,
+// same developer+ tier as the full-page edit form at .../edit, which
+// stays in place unchanged as the no-JS fallback the "Edit" link's
+// plain href still points to).
+func (s *Server) handleDataEditRowFragment(w http.ResponseWriter, r *http.Request) {
+	col, ok := s.restapi.AdminCollection(chi.URLParam(r, "collection"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	row, err := s.restapi.AdminGetRow(r.Context(), col, chi.URLParam(r, "id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = tmpl.ExecuteTemplate(w, "data_row_edit_inline", map[string]any{
+		"Collection": col, "Row": row,
 	})
 }
 
@@ -498,7 +570,13 @@ func (s *Server) handleDataEditForm(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleDataUpdate supports the same two response shapes handleDataDelete
+// does: an htmx request (the inline-edit fragment's Save button) gets
+// back the row's normal display <tr> so hx-swap can drop it back in
+// place; anything else (the no-JS full-page edit form) gets redirected
+// to the list, same as every other write handler here.
 func (s *Server) handleDataUpdate(w http.ResponseWriter, r *http.Request) {
+	owner := ownerFromContext(r.Context())
 	name := chi.URLParam(r, "collection")
 	col, ok := s.restapi.AdminCollection(name)
 	if !ok {
@@ -509,8 +587,16 @@ func (s *Server) handleDataUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
-	if _, err := s.restapi.AdminUpdateRow(r.Context(), col, chi.URLParam(r, "id"), formToBody(r, col)); err != nil {
+	row, err := s.restapi.AdminUpdateRow(r.Context(), col, chi.URLParam(r, "id"), formToBody(r, col))
+	if err != nil {
 		http.Error(w, "update failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if r.Header.Get("HX-Request") != "" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = tmpl.ExecuteTemplate(w, "data_row", map[string]any{
+			"Collection": col, "Row": row, "CanWrite": owner.Role.AtLeast(ownerauth.RoleDeveloper),
+		})
 		return
 	}
 	http.Redirect(w, r, "/admin/ui/data/"+name, http.StatusSeeOther)

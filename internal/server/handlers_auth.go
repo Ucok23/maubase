@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"maubase/internal/auth"
@@ -60,6 +62,57 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	setSessionCookie(w, session)
 	writeJSON(w, http.StatusOK, map[string]any{"expires_at": session.ExpiresAt})
+}
+
+// handleForgotPassword always responds 204, whether or not req.Email
+// belongs to a real account — spec/password-reset.md PWRESET-02, the
+// same "never reveal whether an email is registered" posture
+// OWNR-12/IDNT-05 already take elsewhere in this codebase. An email is
+// only actually sent when the account exists; a delivery/configuration
+// failure (an unset MAUBASE_RESEND_API_KEY, Resend itself erroring) is
+// still surfaced as a real 500, since that happens identically
+// regardless of which email was requested and so doesn't leak anything
+// account-specific.
+func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email string `json:"email"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	rawToken, _, ok, err := s.auth.CreateResetToken(r.Context(), req.Email)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+	if ok {
+		link := s.passwordResetURL + "?token=" + url.QueryEscape(rawToken)
+		html := fmt.Sprintf(
+			`<p>Someone requested a password reset for this account.</p><p><a href="%s">Reset your password</a></p><p>This link expires in one hour. If you didn't request this, you can ignore this email.</p>`,
+			link,
+		)
+		if err := s.email.Send(r.Context(), req.Email, "Reset your password", html); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to send reset email"})
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Token    string `json:"token"`
+		Password string `json:"password"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := s.auth.ResetPassword(r.Context(), req.Token, req.Password); err != nil {
+		writeAuthError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -202,7 +255,8 @@ func writeAuthError(w http.ResponseWriter, err error) {
 		errors.Is(err, auth.ErrSessionNotFound):
 		status = http.StatusUnauthorized
 	case errors.Is(err, auth.ErrWeakPassword),
-		errors.Is(err, auth.ErrInvalidEmail):
+		errors.Is(err, auth.ErrInvalidEmail),
+		errors.Is(err, auth.ErrResetTokenInvalid):
 		status = http.StatusBadRequest
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
