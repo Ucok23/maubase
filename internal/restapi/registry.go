@@ -29,6 +29,7 @@ var reservedTables = map[string]bool{
 	"oauth_consents": true, "oauth_signing_keys": true, "oauth_hmac_secret": true,
 	"owner_users": true, "owner_sessions": true, "owner_audit_log": true,
 	"schema_migrations": true,
+	"files":             true,
 }
 
 type Column struct {

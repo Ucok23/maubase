@@ -16,6 +16,7 @@ import (
 	"baas/internal/ownerauth"
 	"baas/internal/ratelimit"
 	"baas/internal/restapi"
+	"baas/internal/storage"
 )
 
 type Server struct {
@@ -23,6 +24,7 @@ type Server struct {
 	oauth     *oauth.Server
 	ownerAuth *ownerauth.Service
 	restapi   *restapi.Server
+	storage   *storage.Server
 	audit     *audit.Log
 	router    chi.Router
 
@@ -33,9 +35,9 @@ type Server struct {
 // throttle on the login endpoints (see internal/ratelimit); pass 0 for
 // loginRateLimit to disable it (unlimited attempts) — useful for tests
 // that aren't exercising rate-limiting and don't want to think about it.
-func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.Service, restapiSvc *restapi.Server, auditLog *audit.Log, loginRateLimit int, loginRateWindow time.Duration) *Server {
+func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.Service, restapiSvc *restapi.Server, storageSvc *storage.Server, auditLog *audit.Log, loginRateLimit int, loginRateWindow time.Duration) *Server {
 	s := &Server{
-		auth: authSvc, oauth: oauthSvc, ownerAuth: ownerAuthSvc, restapi: restapiSvc, audit: auditLog,
+		auth: authSvc, oauth: oauthSvc, ownerAuth: ownerAuthSvc, restapi: restapiSvc, storage: storageSvc, audit: auditLog,
 		loginLimiter: ratelimit.New(loginRateLimit, loginRateWindow),
 	}
 
@@ -77,6 +79,11 @@ func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.
 	// Auto-REST: every non-reserved table in the database, as a
 	// /api/data/{table} CRUD resource. See internal/restapi.
 	s.restapi.Mount(r)
+
+	// File storage: upload/download endpoints outside auto-REST (files
+	// need multipart/raw-byte handling generic JSON CRUD doesn't do). See
+	// internal/storage.
+	s.storage.Mount(r)
 
 	// Owner plane: the team running this deployment. Entirely separate
 	// cookie/session/table from the customer plane above and the OAuth

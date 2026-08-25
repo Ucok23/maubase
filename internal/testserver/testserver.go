@@ -20,6 +20,7 @@ import (
 	"baas/internal/ownerauth"
 	"baas/internal/restapi"
 	"baas/internal/server"
+	"baas/internal/storage"
 )
 
 // Options configures what a test server starts with, beyond baas's own
@@ -45,6 +46,11 @@ type Options struct {
 	// logs in more than a handful of times would need to think about it.
 	LoginRateLimit  int
 	LoginRateWindow time.Duration
+
+	// MaxUploadBytes caps a single file upload's size (see
+	// internal/storage). Zero means "use the same 25MB default as
+	// config.Load".
+	MaxUploadBytes int64
 }
 
 // New starts a server on an ephemeral local port and returns its base URL
@@ -125,9 +131,19 @@ func NewCustom(t *testing.T, opts Options) string {
 	}
 	restapiSvc := restapi.NewServer(sqlDB, registry, oauthSvc)
 
+	storageBackend, err := storage.NewLocalBackend(filepath.Join(t.TempDir(), "storage"))
+	if err != nil {
+		t.Fatalf("init storage backend: %v", err)
+	}
+	maxUploadBytes := opts.MaxUploadBytes
+	if maxUploadBytes == 0 {
+		maxUploadBytes = 25 << 20 // 25MB, matching config's default
+	}
+	storageSvc := storage.NewServer(sqlDB, storageBackend, oauthSvc, maxUploadBytes)
+
 	auditLog := audit.New(sqlDB)
 
-	httpSrv := &http.Server{Handler: server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, auditLog, opts.LoginRateLimit, opts.LoginRateWindow)}
+	httpSrv := &http.Server{Handler: server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, auditLog, opts.LoginRateLimit, opts.LoginRateWindow)}
 	go httpSrv.Serve(lis) //nolint:errcheck // Serve always returns non-nil; Close() below triggers it deliberately
 	t.Cleanup(func() { httpSrv.Close() })
 

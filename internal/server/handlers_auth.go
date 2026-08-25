@@ -80,9 +80,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, userJSON(user))
 }
 
-// handleExportAccount answers "give me all my data": the caller's profile
-// plus every row they own across every owner-scoped auto-REST collection.
-// See spec/identity.md IDNT-09.
+// handleExportAccount answers "give me all my data": the caller's profile,
+// every row they own across every owner-scoped auto-REST collection, and
+// the metadata (not raw bytes — download those individually) of every
+// file they've uploaded. See spec/identity.md IDNT-09.
 func (s *Server) handleExportAccount(w http.ResponseWriter, r *http.Request) {
 	user, ok := r.Context().Value(ctxKeyUser).(*auth.User)
 	if !ok {
@@ -94,17 +95,24 @@ func (s *Server) handleExportAccount(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
+	files, err := s.storage.ExportOwned(r.Context(), user.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"profile": userJSON(user),
 		"records": records,
+		"files":   files,
 	})
 }
 
 // handleDeleteAccount permanently erases the caller's account: their rows
-// in every owner-scoped auto-REST collection, every outstanding OAuth
-// grant issued to a third-party client on their behalf, and finally the
-// identity-layer record itself (which cascades to their sessions and
-// OAuth consents). See spec/identity.md IDNT-10/11/13.
+// in every owner-scoped auto-REST collection, every file they've uploaded
+// (bytes and metadata), every outstanding OAuth grant issued to a
+// third-party client on their behalf, and finally the identity-layer
+// record itself (which cascades to their sessions and OAuth consents).
+// See spec/identity.md IDNT-10/11/13.
 func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	user, ok := r.Context().Value(ctxKeyUser).(*auth.User)
 	if !ok {
@@ -118,6 +126,10 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	// ordering, not an atomicity guarantee — acceptable for a destructive,
 	// low-frequency operation like this.
 	if err := s.restapi.DeleteOwned(r.Context(), user.ID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+	if err := s.storage.DeleteOwned(r.Context(), user.ID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}

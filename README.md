@@ -95,12 +95,29 @@ What's here now (v1, step 1 of the roadmap):
   the limit), counting every attempt, not just failures, so it actually
   bounds brute-force credential guessing.
 
+- File storage (`internal/storage`, `spec/storage.md`): upload/download
+  endpoints outside auto-REST — uploads and downloads need multipart/raw-
+  byte handling generic JSON CRUD doesn't do — gated by the same kind of
+  OAuth scopes as `/api/data/*` (`files:read`/`files:write`) and row-
+  scoped to whichever subject uploaded each file, same as the `owner_id`
+  convention. Raw bytes are written to disk (`internal/storage.
+  LocalBackend`, pluggable for a future S3-style backend) under
+  `BAAS_STORAGE_DIR`; metadata lives in a `files` table, reserved out of
+  auto-REST.
+  - `POST /api/storage/files` (`multipart/form-data`, field `file`),
+    `GET /api/storage/files` (paginated), `GET /api/storage/files/{id}`
+    (metadata), `GET /api/storage/files/{id}/content` (bytes),
+    `DELETE /api/storage/files/{id}`
+  - Account export/erasure (`GET /api/auth/me/export`,
+    `DELETE /api/auth/me`) cover uploaded files too: export lists their
+    metadata (not raw bytes), and deletion removes both the bytes and the
+    metadata row.
+
 ## Not yet built (see roadmap)
 
 - Row-level access rules beyond the owner_id convention (e.g. custom
   per-collection policies).
 - Realtime subscriptions.
-- File storage.
 - Embedded admin UI (would sit on top of the owner plane above).
 
 ## Compliance posture
@@ -163,6 +180,10 @@ Config via env vars (see `internal/config`):
   /admin/auth/login` attempts per client IP per window
 - `BAAS_SESSION_CLEANUP_INTERVAL_SECONDS` (default `3600`) — how often the
   background janitor purges expired session rows
+- `BAAS_STORAGE_DIR` (default `data/storage`) — where uploaded file bytes
+  are written, one file per upload
+- `BAAS_MAX_UPLOAD_MB` (default `25`) — largest single file upload
+  accepted; a bigger request body is rejected before it's fully read
 
 ## Testing
 
