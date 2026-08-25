@@ -11,9 +11,7 @@ import (
 	"maubase/internal/testserver"
 )
 
-// Scenarios: spec/realtime.md (RT-01..05, RT-07, RT-08). RT-06 (a denied
-// _policies operation never produces events) has no test yet — it
-// depends on spec/access-rules.md's _policies table, which isn't built.
+// Scenarios: spec/realtime.md (RT-01..08).
 
 func wsURL(baseURL string) string {
 	return strings.Replace(baseURL, "http://", "ws://", 1) + "/api/realtime"
@@ -303,4 +301,22 @@ func TestRealtime_ClosingConnectionCleansUpSubscription(t *testing.T) {
 	if ev.Type != "created" || ev.Record["title"] != "still here" {
 		t.Fatalf("want connB's own event after connA closed, got %+v", ev)
 	}
+}
+
+func TestRealtime_DeniedReadProducesNoEvents(t *testing.T) {
+	// RT-06
+	baseURL := testserver.NewWithSchema(t, notesSchema, policyRow("notes", "read", "denied"))
+	token := restToken(t, baseURL, "rt-denied@example.com", []string{"records:read", "records:write"})
+
+	rc := connectRealtime(t, baseURL, token)
+	subscribe(t, rc, "notes")
+
+	// create isn't denied, so the write itself succeeds...
+	resp := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", token, map[string]any{"title": "x", "body": "x"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create note: want 201, got %d", resp.StatusCode)
+	}
+	// ...but nobody is authorized to read this collection at all, so no
+	// subscriber — including its own creator — is notified of it either.
+	expectNoEvent(t, rc)
 }

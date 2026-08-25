@@ -1,13 +1,14 @@
 # Row-level access rules
 
-**Design spec — not yet implemented.** `internal/restapi` today has exactly
-one authorization rule, applied identically to all four operations
-(read/create/update/delete): a table with an `owner_id` column is scoped
-to whoever created each row (see `spec/auto-rest.md`'s REST-OWNERSHIP-*),
-a table without one is fully shared (REST-SHARED-01). This spec describes
-the intended behavior of a second, optional mechanism that sits on top of
-that default — written first, per this repo's spec-first convention
-(`spec/README.md`), so the implementation has a concrete target.
+`internal/restapi`'s baseline authorization rule is applied identically
+to all four operations (read/create/update/delete): a table with an
+`owner_id` column is scoped to whoever created each row (see
+`spec/auto-rest.md`'s REST-OWNERSHIP-*), a table without one is fully
+shared (REST-SHARED-01). This spec describes a second, optional mechanism
+that sits on top of that default, letting a deployment override specific
+operations per collection. See `internal/restapi/registry.go`'s
+`applyPolicies` for the implementation, `test/access_rules_test.go` for
+the tests.
 
 ## The model
 
@@ -29,6 +30,12 @@ for fixed vocabularies over free-form config (OAuth scopes, owner roles):
   this API entirely, regardless of caller or scope. For data a deployment
   wants readable/writable only by its own backend logic, never directly
   by an end-user token.
+
+`create` is the one operation where `owner` and `shared` behave
+identically: there's no existing row to scope a brand-new one against,
+so either rule lets any caller with the write scope create one (still
+owned by their own subject — see ACCESS-04). `denied` is the only rule
+that changes `create`'s behavior.
 
 An operation with no matching `_policies` row keeps today's default
 behavior exactly — this is additive, not a breaking change to

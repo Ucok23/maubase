@@ -87,6 +87,31 @@ func NewWithLoginRateLimit(t *testing.T, limit int, window time.Duration) string
 // wrappers over it for the common cases.
 func NewCustom(t *testing.T, opts Options) string {
 	t.Helper()
+	url, err := newCustom(t, opts)
+	if err != nil {
+		t.Fatalf("discover rest collections: %v", err)
+	}
+	return url
+}
+
+// NewCustomExpectingDiscoverError is NewCustom, but for the one scenario
+// where opts is expected to fail schema discovery at startup — an
+// invalid _policies row (spec/access-rules.md ACCESS-08) — rather than
+// start successfully. It returns that error instead of failing the test,
+// so the test can assert on it; every other setup failure (a bad Schema
+// statement, say) still fails the test immediately via t.Fatalf, since
+// those aren't what's under test here.
+func NewCustomExpectingDiscoverError(t *testing.T, opts Options) error {
+	t.Helper()
+	_, err := newCustom(t, opts)
+	if err == nil {
+		t.Fatalf("want schema discovery to fail, but the server started successfully")
+	}
+	return err
+}
+
+func newCustom(t *testing.T, opts Options) (string, error) {
+	t.Helper()
 
 	// The issuer has to be known before the oauth server is built (it's
 	// baked into JWT "iss" claims and the token endpoint URL), so the
@@ -130,7 +155,7 @@ func NewCustom(t *testing.T, opts Options) string {
 
 	registry, err := restapi.Discover(context.Background(), sqlDB)
 	if err != nil {
-		t.Fatalf("discover rest collections: %v", err)
+		return "", err
 	}
 	restapiSvc := restapi.NewServer(sqlDB, registry, oauthSvc, broker)
 
@@ -152,5 +177,5 @@ func NewCustom(t *testing.T, opts Options) string {
 	go httpSrv.Serve(lis) //nolint:errcheck // Serve always returns non-nil; Close() below triggers it deliberately
 	t.Cleanup(func() { httpSrv.Close() })
 
-	return issuer
+	return issuer, nil
 }

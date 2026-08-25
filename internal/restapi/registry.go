@@ -30,7 +30,32 @@ var reservedTables = map[string]bool{
 	"owner_users": true, "owner_sessions": true, "owner_audit_log": true,
 	"schema_migrations": true,
 	"files":             true,
+	"_policies":         true,
 }
+
+// Rule is one of a closed vocabulary of per-operation access rules a
+// collection can have — see spec/access-rules.md.
+type Rule string
+
+const (
+	// RuleOwner restricts an operation to the row's own owner_id.
+	// Requires the collection to have an OwnerColumn.
+	RuleOwner Rule = "owner"
+	// RuleShared allows any caller with the operation's scope,
+	// unfiltered by row.
+	RuleShared Rule = "shared"
+	// RuleDenied turns an operation off for a collection entirely,
+	// through this API, regardless of caller or scope.
+	RuleDenied Rule = "denied"
+)
+
+// Operation names as stored in the _policies table.
+const (
+	OpRead   = "read"
+	OpCreate = "create"
+	OpUpdate = "update"
+	OpDelete = "delete"
+)
 
 type Column struct {
 	Name     string
@@ -56,6 +81,13 @@ type Collection struct {
 	// OwnerColumn is "" for a shared table, or OwnerColumnName for one
 	// where every row is scoped to the token subject that created it.
 	OwnerColumn string
+
+	// ReadRule/CreateRule/UpdateRule/DeleteRule are this collection's
+	// effective per-operation access rule: RuleOwner if OwnerColumn is
+	// set, RuleShared otherwise, unless overridden by a row in
+	// _policies — see spec/access-rules.md. Read covers both list and
+	// get-by-id.
+	ReadRule, CreateRule, UpdateRule, DeleteRule Rule
 }
 
 func (c *Collection) HasColumn(name string) bool {
@@ -96,7 +128,10 @@ func (r *Registry) ownedCollections() []*Collection {
 
 // Discover introspects the database's actual schema (via sqlite_master
 // and PRAGMA table_info) and returns every table eligible to be exposed:
-// not reserved, and with exactly one primary-key column.
+// not reserved, and with exactly one primary-key column. Every
+// collection's default per-operation access rule is set from whether it
+// has an owner_id column, then any override declared in _policies is
+// applied on top — see applyPolicies and spec/access-rules.md.
 func Discover(ctx context.Context, db *sql.DB) (*Registry, error) {
 	rows, err := db.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table'`)
 	if err != nil {
@@ -130,9 +165,63 @@ func Discover(ctx context.Context, db *sql.DB) (*Registry, error) {
 			// PK, or a composite one, can't be addressed at /{id}.
 			continue
 		}
+		def := RuleShared
+		if col.OwnerColumn != "" {
+			def = RuleOwner
+		}
+		col.ReadRule, col.CreateRule, col.UpdateRule, col.DeleteRule = def, def, def, def
 		reg.collections[name] = col
 	}
+
+	if err := applyPolicies(ctx, db, reg); err != nil {
+		return nil, err
+	}
 	return reg, nil
+}
+
+// applyPolicies overrides each named collection's default rule for each
+// (collection, operation) row found in _policies. A row naming a
+// collection Discover didn't expose (unknown, reserved, or no
+// single-column PK), an unrecognized operation, or a RuleOwner override
+// on a collection with no owner_id column (spec/access-rules.md
+// ACCESS-08) fails the whole call — a deployment's own migrations are a
+// trusted, deliberate configuration, so a mistake here should stop
+// startup loudly rather than silently apply nothing.
+func applyPolicies(ctx context.Context, db *sql.DB, reg *Registry) error {
+	rows, err := db.QueryContext(ctx, `SELECT collection, operation, rule FROM _policies`)
+	if err != nil {
+		return fmt.Errorf("list access policies: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var collection, operation, rule string
+		if err := rows.Scan(&collection, &operation, &rule); err != nil {
+			return fmt.Errorf("scan access policy: %w", err)
+		}
+		col, ok := reg.collections[collection]
+		if !ok {
+			return fmt.Errorf("_policies: %s.%s: no such exposed collection", collection, operation)
+		}
+		r := Rule(rule)
+		if r == RuleOwner && col.OwnerColumn == "" {
+			return fmt.Errorf("_policies: %s.%s: rule %q requires an %s column, but %s has none",
+				collection, operation, RuleOwner, OwnerColumnName, collection)
+		}
+		switch operation {
+		case OpRead:
+			col.ReadRule = r
+		case OpCreate:
+			col.CreateRule = r
+		case OpUpdate:
+			col.UpdateRule = r
+		case OpDelete:
+			col.DeleteRule = r
+		default:
+			return fmt.Errorf("_policies: %s: unknown operation %q", collection, operation)
+		}
+	}
+	return rows.Err()
 }
 
 func isReserved(name string) bool {
