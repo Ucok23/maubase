@@ -24,6 +24,7 @@ import (
 	"maubase/internal/realtime"
 	"maubase/internal/restapi"
 	"maubase/internal/server"
+	"maubase/internal/social"
 	"maubase/internal/storage"
 )
 
@@ -91,7 +92,18 @@ func run() error {
 		emailSender = email.NewResendSender(cfg.ResendAPIKey, cfg.EmailFrom)
 	}
 
-	srv := server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, adminuiSvc, auditLog, cfg.LoginRateLimit, cfg.LoginRateWindow, emailSender, cfg.PasswordResetURL)
+	// Each provider only goes in the map if its client id/secret are
+	// both set — an unconfigured provider 404s rather than the server
+	// refusing to start over it (see spec/social-login.md).
+	socialProviders := map[string]social.Provider{}
+	if cfg.GoogleClientID != "" && cfg.GoogleClientSecret != "" {
+		socialProviders["google"] = social.Google(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.Issuer+"/api/auth/social/google/callback")
+	}
+	if cfg.GitHubClientID != "" && cfg.GitHubClientSecret != "" {
+		socialProviders["github"] = social.GitHub(cfg.GitHubClientID, cfg.GitHubClientSecret, cfg.Issuer+"/api/auth/social/github/callback")
+	}
+
+	srv := server.New(authSvc, oauthSvc, ownerSvc, restapiSvc, storageSvc, realtimeSvc, adminuiSvc, auditLog, cfg.LoginRateLimit, cfg.LoginRateWindow, emailSender, cfg.PasswordResetURL, socialProviders, cfg.SocialLoginRedirectURL)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,

@@ -271,6 +271,10 @@ Config via env vars (see `internal/config`):
   `internal/email.NoopSender`, which fails loudly the first time
   something actually tries to send rather than silently dropping the
   email
+- `MAUBASE_GOOGLE_CLIENT_ID` / `_SECRET`, `MAUBASE_GITHUB_CLIENT_ID` / `_SECRET`,
+  `MAUBASE_SOCIAL_LOGIN_REDIRECT_URL` — social login (see below); each
+  provider is independently optional (unset client id/secret just means
+  that one 404s — see `spec/social-login.md` SOCIAL-05)
 
 ## Password reset
 
@@ -284,6 +288,21 @@ password and signs the account out everywhere, including whatever
 session requested the reset. Delivery is via `internal/email.Sender` —
 Resend (`internal/email.ResendSender`) when both `MAUBASE_RESEND_API_KEY`
 and `MAUBASE_EMAIL_FROM` are set. See `spec/password-reset.md`.
+
+## Social login
+
+`GET /api/auth/social/{provider}` (`google` or `github`) redirects to
+that provider's own sign-in page; `GET
+/api/auth/social/{provider}/callback` is where it sends the browser
+back to — on success this sets the same identity-layer session cookie
+`POST /api/auth/login` does and redirects to
+`MAUBASE_SOCIAL_LOGIN_REDIRECT_URL` (your own frontend, not a maubase
+page). A first-time identity creates an account (linking to an existing
+one by email if there's a match, rather than duplicating it); a
+returning one just signs in. `internal/social` is maubase acting as an
+OAuth *client* to Google/GitHub — the opposite direction from
+`internal/oauth`, which is maubase acting as an OAuth *authorization
+server* for third-party apps. See `spec/social-login.md`.
 
 ## Testing
 
