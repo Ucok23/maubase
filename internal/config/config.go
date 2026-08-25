@@ -81,6 +81,14 @@ type Config struct {
 	// maubase issues the session, it doesn't render a page for a human
 	// to look at next.
 	SocialLoginRedirectURL string
+
+	// RedisURL, if set, upgrades realtime fan-out from single-process
+	// (the default — see internal/realtime's package doc) to
+	// cross-process via Redis pub/sub (internal/realtime.RedisRelay) —
+	// the fix for spec/realtime.md's documented v1 limit. A
+	// redis://[:password@]host:port[/db] connection string; empty means
+	// "just this one process," which is what most deployments want.
+	RedisURL string
 }
 
 func Load() Config {
@@ -104,6 +112,7 @@ func Load() Config {
 		GitHubClientID:         getEnv("MAUBASE_GITHUB_CLIENT_ID", ""),
 		GitHubClientSecret:     getEnv("MAUBASE_GITHUB_CLIENT_SECRET", ""),
 		SocialLoginRedirectURL: getEnv("MAUBASE_SOCIAL_LOGIN_REDIRECT_URL", ""),
+		RedisURL:               getEnv("MAUBASE_REDIS_URL", ""),
 	}
 }
 

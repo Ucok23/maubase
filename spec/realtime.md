@@ -6,7 +6,8 @@ changes as they happen, layered on top of auto-REST's existing row-level
 visibility rules (`owner_id`, and any `_policies` override — see
 `spec/access-rules.md`) rather than introducing a separate authorization
 model. See `internal/realtime` for the implementation, `test/realtime_test.go`
-for the tests.
+for the tests (`test/realtime_relay_test.go` for RT-09's cross-process
+case).
 
 ## The model
 
@@ -37,14 +38,19 @@ current state fetches it once via a normal `GET /api/data/{table}`
 request before or after subscribing; the stream is for staying current
 after that, not for initial sync.
 
-**Known v1 limit**: fan-out is entirely in-process (`internal/realtime`'s
-package doc) — every write already goes through this server's own
-auto-REST handlers, so there's no database-level change feed to plug
-into or need one. That only holds for a single server process, which
-matches this project's whole design (`internal/db.Open` already pins
-`SetMaxOpenConns(1)` since SQLite has one writer anyway). Running more
-than one app instance behind a load balancer would need an external
-broker (Redis pub/sub, NATS) instead — not needed today.
+Fan-out is in-process by default (`internal/realtime`'s package doc) —
+every write already goes through this server's own auto-REST handlers,
+so there's no database-level change feed to plug into or need one. That
+covers a single server process, which matches this project's whole
+design (`internal/db.Open` already pins `SetMaxOpenConns(1)` since
+SQLite has one writer anyway) and is what most deployments run. Running
+more than one app instance behind a load balancer — a real option once
+horizontal scaling is the reason, since SQLite's own file locking
+already serializes writes across as many processes as point at the same
+file — needs `MAUBASE_REDIS_URL` set to a shared Redis instance
+(`internal/realtime.RedisRelay`): a subscriber connected to one process
+then also sees writes made on any other process sharing that Redis. See
+RT-09.
 
 ## RT-01: Connecting requires the same scope GET would
 Given a WebSocket handshake to `/api/realtime` with no access token, or
@@ -103,3 +109,14 @@ Given a connection with one or more active subscriptions,
 when the connection closes (client-initiated or otherwise),
 then no further events are ever delivered to it — there's nothing to
 explicitly unsubscribe from first.
+
+## RT-09: A Redis relay delivers events across server processes
+Given two separate maubase server processes, each configured with the
+same `MAUBASE_REDIS_URL` (and so each running a `Broker` built via
+`realtime.NewBrokerWithRelay`), and a subscriber connected to process B,
+when a row is created, updated, or deleted via process A — the same as
+RT-02/03/04, just against a different process's HTTP endpoint,
+then process B's subscriber receives the event exactly as if the write
+had happened on process B itself. Without `MAUBASE_REDIS_URL` set
+(`Broker`'s default, `NewBroker`), this does not hold — see the note
+above.

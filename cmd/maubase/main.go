@@ -66,6 +66,13 @@ func run() error {
 	}
 
 	broker := realtime.NewBroker()
+	if cfg.RedisURL != "" {
+		relay, err := realtime.NewRedisRelay(cfg.RedisURL, "maubase:realtime")
+		if err != nil {
+			return fmt.Errorf("init redis relay: %w", err)
+		}
+		broker = realtime.NewBrokerWithRelay(ctx, relay)
+	}
 
 	registry, err := restapi.Discover(ctx, sqlDB)
 	if err != nil {
