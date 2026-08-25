@@ -44,6 +44,18 @@ then the response is `403` with a plain explanation — distinct from
 ADMINUI-01's redirect, since this owner *is* authenticated, just not
 privileged enough for this page.
 
+## ADMINUI-31: The sidebar and dashboard only link to pages a role can actually open
+Given a signed-in owner,
+when they view the sidebar or the dashboard,
+then a link to a page above their role's minimum simply isn't there —
+a `viewer` or `developer` sees no Members/Audit log/Maintenance link
+(admin+), and anyone below `owner` sees no SQL Studio link (owner-only) —
+rather than a link that leads to ADMINUI-05's Forbidden page. This is
+purely about what's offered to click: `GET`ting one of those routes
+directly (a stale bookmark, a hand-typed URL) still gets `403` exactly as
+ADMINUI-05 describes — hiding the link is a navigation nicety, not a new
+or looser authorization boundary.
+
 ## Owners (`/admin/ui/owners`, admin+ to view, owner-only to mutate — same as `/admin/owners`'s JSON API)
 
 ## ADMINUI-06: The owners page lists every owner account

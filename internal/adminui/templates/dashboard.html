@@ -6,6 +6,7 @@
 <p>Browse and edit application tables — every row, regardless of owner.</p>
 <a href="/admin/ui/data" class="btn btn-outline">Open →</a>
 </article>
+{{if atLeast .Owner.Role "admin"}}
 <article class="card">
 <h3>Members</h3>
 <p>Manage who can administer this deployment.</p>
@@ -21,5 +22,6 @@
 <p>Purge expired sessions on demand.</p>
 <a href="/admin/ui/maintenance" class="btn btn-outline">Open →</a>
 </article>
+{{end}}
 </div>
 {{template "footer" .}}{{end}}
