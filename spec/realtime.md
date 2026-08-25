@@ -1,12 +1,15 @@
 # Realtime subscriptions
 
-**Design spec — not yet implemented.** Every existing surface is
-request/response HTTP: a client notices a change only by polling. This
-spec describes a WebSocket stream that instead pushes row changes as they
-happen, layered on top of auto-REST's existing row-level visibility rules
-(`owner_id`, and any `_policies` override — see `spec/access-rules.md`)
-rather than introducing a separate authorization model. Written first,
-per this repo's spec-first convention (`spec/README.md`).
+Every other surface is request/response HTTP: a client notices a change
+only by polling. This is a WebSocket stream that instead pushes row
+changes as they happen, layered on top of auto-REST's existing row-level
+visibility rules (`owner_id`, and any `_policies` override — see
+`spec/access-rules.md`, not yet built) rather than introducing a separate
+authorization model. See `internal/realtime` for the implementation.
+
+RT-06 has no implementation yet — it depends on `_policies`
+(`spec/access-rules.md`), which isn't built. Every other scenario here is
+implemented and tested (`test/realtime_test.go`).
 
 ## The model
 
@@ -36,6 +39,15 @@ changes from the moment it was accepted onward. A client that needs
 current state fetches it once via a normal `GET /api/data/{table}`
 request before or after subscribing; the stream is for staying current
 after that, not for initial sync.
+
+**Known v1 limit**: fan-out is entirely in-process (`internal/realtime`'s
+package doc) — every write already goes through this server's own
+auto-REST handlers, so there's no database-level change feed to plug
+into or need one. That only holds for a single server process, which
+matches this project's whole design (`internal/db.Open` already pins
+`SetMaxOpenConns(1)` since SQLite has one writer anyway). Running more
+than one app instance behind a load balancer would need an external
+broker (Redis pub/sub, NATS) instead — not needed today.
 
 ## RT-01: Connecting requires the same scope GET would
 Given a WebSocket handshake to `/api/realtime` with no access token, or

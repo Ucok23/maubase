@@ -26,4 +26,4 @@ and so a spec change makes it easy to find what needs re-verifying.
 - [oauth-discovery.md](oauth-discovery.md) — well-known endpoints
 - [maintenance.md](maintenance.md) — session cleanup and login rate-limiting
 - [access-rules.md](access-rules.md) — row-level access rules beyond `owner_id` (design spec, not yet built)
-- [realtime.md](realtime.md) — realtime subscriptions (design spec, not yet built)
+- [realtime.md](realtime.md) — realtime subscriptions
