@@ -93,6 +93,21 @@ function escapeHtml(s) {
 
 function buildRunSection(run, index) {
   const shots = readSortedScreenshots(run.slug);
+  // Steps and screenshots are paired purely by array position (step i's
+  // screenshot is shots[i]) — there's no name or id linking a given
+  // test.step() to the shot() call inside it. That's fine as long as
+  // every step calls shot() exactly once, but silently wrong the moment
+  // one doesn't: every screenshot after the gap shifts up by one and
+  // ends up captioned with the wrong step's title, with nothing about
+  // the output looking obviously broken. Failing loudly here beats
+  // shipping a report that's quietly mislabeled throughout.
+  if (shots.length !== run.steps.length) {
+    throw new Error(
+      `${run.file} ("${run.title}"): ${run.steps.length} test.step() call(s) but ${shots.length} screenshot(s) in screenshots/${run.slug}/. ` +
+        `Every test.step() in a spec must call shot() exactly once — otherwise every screenshot after the gap gets paired with the wrong step's title. ` +
+        `Add the missing shot() call (or remove the extra one), then rerun.`
+    );
+  }
   const stepsHtml = run.steps
     .map((step, i) => {
       const shotFile = shots[i];

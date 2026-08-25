@@ -1,40 +1,22 @@
-// A single end-to-end walk through the embedded admin UI (spec/admin-ui.md),
-// narrated with test.step() and a numbered screenshot after each one, with
-// Playwright recording the whole run to video throughout (see
-// playwright.config.ts's use.video) — the storyboard-plus-video "show your
-// work" artifact this suite exists to produce, not a bag of independent
-// assertions.
-import { test, expect, type Page } from '@playwright/test';
-import fs from 'node:fs';
-import path from 'node:path';
+// The customer-plane story: an owner manages a customer account end to
+// end through the Users panel (spec/admin-ui.md ADMINUI-25..30) and
+// confirms it in the audit trail. Narrated with test.step() and a
+// numbered screenshot after each one, with Playwright recording the whole
+// run to video throughout (see playwright.config.ts's use.video) — the
+// storyboard-plus-video "show your work" artifact this suite exists to
+// produce, not a bag of independent assertions.
+//
+// One of several role/area-focused specs in this directory — see
+// owner-console.spec.ts (the rest of the owner-only surface: Members,
+// Maintenance, Create Table, Data, SQL Studio) and
+// viewer-access.spec.ts/developer-access.spec.ts/admin-access.spec.ts
+// (the same admin UI, from every other role's seat, not just owner's).
+import { test, expect } from '@playwright/test';
+import { OWNER_EMAIL, OWNER_PASSWORD, acceptNextDialog, makeShotter, signIn, signOut } from './support';
 
-const OWNER_EMAIL = process.env.MAUBASE_BOOTSTRAP_OWNER_EMAIL ?? 'owner@e2e.test';
-const OWNER_PASSWORD = process.env.MAUBASE_BOOTSTRAP_OWNER_PASSWORD ?? 'e2e-password-123';
+const shot = makeShotter(__filename);
 
-// Namespaced by this file's own basename (e.g. screenshots/admin-ui-flow/)
-// so a second spec file can't clobber this one's numbering — and so
-// scripts/build-report.mjs can find the right screenshots for a given
-// spec purely from report.json's suite.file, no hardcoded path needed.
-const SHOTS_DIR = path.join(__dirname, '..', 'screenshots', path.basename(__filename).replace(/\.spec\.ts$/, ''));
-fs.rmSync(SHOTS_DIR, { recursive: true, force: true });
-fs.mkdirSync(SHOTS_DIR, { recursive: true });
-
-let shotIndex = 0;
-async function shot(page: Page, name: string) {
-  shotIndex += 1;
-  const file = path.join(SHOTS_DIR, `${String(shotIndex).padStart(2, '0')}-${name}.png`);
-  await page.screenshot({ path: file, fullPage: true });
-}
-
-// acceptNextDialog primes the page's native confirm() for the delete/
-// revoke buttons' onsubmit="return confirm(...)" (see
-// templates/user_detail.html) — Playwright never shows these, so a
-// listener has to accept them or the click just hangs.
-function acceptNextDialog(page: Page) {
-  page.once('dialog', (dialog) => dialog.accept());
-}
-
-test('an admin signs in, manages a customer account end to end, and checks the audit trail', async ({ page }) => {
+test('an owner signs in, manages a customer account end to end, and checks the audit trail', async ({ page }) => {
   const newUserEmail = `e2e-created-${Date.now()}@example.com`;
   const newUserPassword = 'created-password-1';
 
@@ -45,12 +27,7 @@ test('an admin signs in, manages a customer account end to end, and checks the a
   });
 
   await test.step('signing in as the bootstrap owner', async () => {
-    await page.fill('input[name="email"]', OWNER_EMAIL);
-    await page.fill('input[name="password"]', OWNER_PASSWORD);
-    await Promise.all([
-      page.waitForURL('**/admin/ui'),
-      page.click('button[type="submit"]'),
-    ]);
+    await signIn(page, OWNER_EMAIL, OWNER_PASSWORD);
     await expect(page.getByText(OWNER_EMAIL).first()).toBeVisible();
     await shot(page, 'dashboard');
   });
@@ -115,10 +92,7 @@ test('an admin signs in, manages a customer account end to end, and checks the a
   });
 
   await test.step('signing out', async () => {
-    await Promise.all([
-      page.waitForURL('**/admin/ui/login'),
-      page.click('button:has-text("Log out")'),
-    ]);
+    await signOut(page);
     await shot(page, 'logged-out');
   });
 });
