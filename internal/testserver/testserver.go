@@ -53,6 +53,14 @@ type Options struct {
 	// internal/storage). Zero means "use the same 25MB default as
 	// config.Load".
 	MaxUploadBytes int64
+
+	// Relay, if set, builds this server's realtime.Broker with
+	// realtime.NewBrokerWithRelay instead of realtime.NewBroker — for
+	// tests proving cross-process fan-out (spec/realtime.md RT-09) by
+	// standing up two servers sharing one Relay (see
+	// test/realtime_relay_test.go). nil, the default, is a plain
+	// single-process Broker, same as every other test.
+	Relay realtime.Relay
 }
 
 // New starts a server on an ephemeral local port and returns its base URL
@@ -82,6 +90,14 @@ func NewWithSchema(t *testing.T, schema ...string) string {
 func NewWithLoginRateLimit(t *testing.T, limit int, window time.Duration) string {
 	t.Helper()
 	return NewCustom(t, Options{LoginRateLimit: limit, LoginRateWindow: window})
+}
+
+// NewWithRelay is NewWithSchema, plus building the server's Broker with
+// the given Relay (realtime.NewBrokerWithRelay) instead of the plain
+// single-process realtime.NewBroker — see Options.Relay.
+func NewWithRelay(t *testing.T, relay realtime.Relay, schema ...string) string {
+	t.Helper()
+	return NewCustom(t, Options{Relay: relay, Schema: schema})
 }
 
 // NewCustom is the general form; New/NewWithOwner/NewWithSchema are thin
@@ -153,6 +169,11 @@ func newCustom(t *testing.T, opts Options) (string, error) {
 	}
 
 	broker := realtime.NewBroker()
+	if opts.Relay != nil {
+		relayCtx, cancelRelay := context.WithCancel(context.Background())
+		t.Cleanup(cancelRelay)
+		broker = realtime.NewBrokerWithRelay(relayCtx, opts.Relay)
+	}
 
 	registry, err := restapi.Discover(context.Background(), sqlDB)
 	if err != nil {

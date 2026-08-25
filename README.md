@@ -121,10 +121,11 @@ What's here now (v1, step 1 of the roadmap):
   the exact same row-level visibility auto-REST's `owner_id` convention
   already enforces for `GET` — nothing bypasses it, since fan-out happens
   inside auto-REST's own write handlers rather than through a separate
-  change feed. No replay/backfill in v1, and fan-out is in-process only
-  (see the spec's "Known v1 limit" — fine for this project's
-  single-server-process design, would need an external broker if that
-  ever changed).
+  change feed. No replay/backfill in v1. Fan-out is in-process by default
+  — fine for this project's usual single-server-process design — and
+  optionally cross-process via Redis pub/sub (`MAUBASE_REDIS_URL`, see
+  below) once more than one instance is running behind a load balancer
+  (spec/realtime.md RT-09).
 
 - Row-level access rules (`internal/restapi/registry.go`'s
   `applyPolicies`, `spec/access-rules.md`): beyond the owner_id
@@ -265,6 +266,30 @@ Config via env vars (see `internal/config`):
   are written, one file per upload
 - `MAUBASE_MAX_UPLOAD_MB` (default `25`) — largest single file upload
   accepted; a bigger request body is rejected before it's fully read
+- `MAUBASE_REDIS_URL` (default unset) — set to a `redis://` connection
+  string shared by every instance to upgrade realtime fan-out from
+  single-process to cross-process; see "Realtime scaling" below
+
+## Realtime scaling
+
+By default (`MAUBASE_REDIS_URL` unset), `internal/realtime.Broker` fans
+events out purely in-process: a subscriber connected to this server
+process only ever sees writes that also happened on this same process.
+That's the right default — it matches this project's usual single-VPS,
+single-process shape, and `internal/db.Open` already pins
+`SetMaxOpenConns(1)` since SQLite has one writer anyway.
+
+Running more than one `maubase` process behind a load balancer — a real
+option once horizontal scaling of the stateless HTTP layer is the goal,
+since SQLite's own file locking already serializes writes across however
+many processes point at the same database file — needs each process
+started with the same `MAUBASE_REDIS_URL`. That upgrades the broker to
+`internal/realtime.RedisRelay`: every write still reaches its own
+process's subscribers immediately (a slow or briefly-unreachable Redis
+never adds latency to, or fails, the write path that triggered it), and
+is additionally relayed over Redis pub/sub so every other process
+sharing that Redis delivers it to its own subscribers too. See
+`spec/realtime.md` RT-09 and `test/realtime_relay_test.go`.
 
 ## Testing
 

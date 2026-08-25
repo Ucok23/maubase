@@ -1,8 +1,8 @@
 // Package realtime is the realtime layer: a WebSocket endpoint
-// (server.go) backed by an in-process pub/sub broker that
-// internal/restapi's write handlers publish to after every successful
-// create/update/delete. See spec/realtime.md for the externally
-// observable behavior this implements.
+// (server.go) backed by a pub/sub broker that internal/restapi's write
+// handlers publish to after every successful create/update/delete. See
+// spec/realtime.md for the externally observable behavior this
+// implements.
 //
 // Unlike Postgres's LISTEN/NOTIFY or a binlog, there's no database-level
 // change feed here — and none is needed. Every write already goes
@@ -12,16 +12,21 @@
 // this broker. That's simpler than tailing a change log, not a
 // workaround for SQLite lacking one.
 //
-// The tradeoff: this only fans out within one process. internal/db.Open
-// already pins SetMaxOpenConns(1) because SQLite has one writer anyway,
-// so this project's whole design assumes a single server process. If
-// that ever changed — multiple app instances behind a load balancer — a
-// subscriber connected to one instance would never see a write that
-// landed on another, since Broker is just in-memory. That would need an
-// external broker (Redis pub/sub, NATS) instead; not needed here.
+// Fan-out is in-process by default (NewBroker) — fine for this
+// project's usual single-server-process shape, where
+// internal/db.Open's SetMaxOpenConns(1) already reflects SQLite having
+// one writer anyway. Run more than one maubase process (behind a load
+// balancer, say — SQLite's own file locking is still what actually
+// serializes writes across them) and a subscriber connected to one
+// instance would never see a write that landed on another purely
+// in-memory. NewBrokerWithRelay is the fix — see Relay and RedisRelay.
 package realtime
 
-import "sync"
+import (
+	"context"
+	"sync"
+	"time"
+)
 
 // Event is one row-level change, pushed to every subscriber of its
 // Collection that's authorized to see it.
@@ -42,15 +47,38 @@ type Conn struct {
 	events  chan Event
 }
 
-// Broker fans Events out to subscribed Conns, entirely in-process — see
-// the package doc for why that's sufficient here, and its one limit.
+// Broker fans Events out to subscribed Conns — in-process only unless
+// built with a Relay, see the package doc.
 type Broker struct {
-	mu   sync.Mutex
-	subs map[string]map[*Conn]struct{} // collection -> subscribed conns
+	mu    sync.Mutex
+	subs  map[string]map[*Conn]struct{} // collection -> subscribed conns
+	relay Relay
 }
 
+// NewBroker builds a single-process broker — the default, and what every
+// spec/realtime.md scenario describes.
 func NewBroker() *Broker {
 	return &Broker{subs: make(map[string]map[*Conn]struct{})}
+}
+
+// NewBrokerWithRelay is NewBroker plus relay: Publish additionally
+// fans each event out over relay for every other process sharing it to
+// see (best-effort — a relay error never blocks or fails the write path
+// that triggered the publish, since the event still reaches this
+// process's own subscribers either way), and a background goroutine
+// runs for the lifetime of ctx, calling relay.Run to receive whatever
+// other processes publish and hand it to this process's own local
+// subscribers exactly as if it had originated here (never re-relayed
+// again — that's what would turn this into an infinite loop across
+// instances).
+func NewBrokerWithRelay(ctx context.Context, relay Relay) *Broker {
+	b := &Broker{subs: make(map[string]map[*Conn]struct{}), relay: relay}
+	go func() {
+		_ = relay.Run(ctx, func(ev Event, ownerID string) {
+			b.publishLocal(ev, ownerID)
+		})
+	}()
+	return b
 }
 
 // NewConn registers a new subscriber identity for subject. The caller is
@@ -90,17 +118,38 @@ func (b *Broker) Close(c *Conn) {
 	close(c.events)
 }
 
-// Publish delivers ev to every current subscriber of ev.Collection that's
-// authorized to see it: everyone, if ownerID is "" (a shared table, or an
-// owner-scoped one's operation opened up by an access-policy override —
-// visibility was already gated by scope at subscribe time, not by row);
-// otherwise, only the subscriber whose Subject equals ownerID.
+// Publish delivers ev to every current subscriber of ev.Collection on
+// this process that's authorized to see it: everyone, if ownerID is ""
+// (a shared table, or an owner-scoped one's operation opened up by an
+// access-policy override — visibility was already gated by scope at
+// subscribe time, not by row); otherwise, only the subscriber whose
+// Subject equals ownerID. If this Broker was built with a Relay
+// (NewBrokerWithRelay), the event is also handed to it so every other
+// process sharing that Relay delivers it to their own local subscribers
+// too — see the package doc.
 //
-// Delivery is non-blocking and at-most-once: a subscriber whose event
-// channel is full (client not reading fast enough) simply misses the
-// event rather than stalling the write path that triggered it. See
+// Local delivery is non-blocking and at-most-once: a subscriber whose
+// event channel is full (client not reading fast enough) simply misses
+// the event rather than stalling the write path that triggered it. See
 // spec/realtime.md's note that there's no replay/backfill in v1.
 func (b *Broker) Publish(ev Event, ownerID string) {
+	b.publishLocal(ev, ownerID)
+	if b.relay == nil {
+		return
+	}
+	// Relaying happens off to the side, deliberately: a slow or
+	// momentarily-unreachable Redis shouldn't add latency to (or fail)
+	// the auto-REST write that triggered this — this process's own
+	// subscribers already got their copy above regardless of what
+	// happens here.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = b.relay.Publish(ctx, ev, ownerID)
+	}()
+}
+
+func (b *Broker) publishLocal(ev Event, ownerID string) {
 	b.mu.Lock()
 	subs := b.subs[ev.Collection]
 	conns := make([]*Conn, 0, len(subs))

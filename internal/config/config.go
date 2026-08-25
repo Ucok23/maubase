@@ -49,6 +49,14 @@ type Config struct {
 	// MaxUploadBytes caps a single file upload's size; a larger request
 	// body is rejected before it's fully read. See internal/storage.
 	MaxUploadBytes int64
+
+	// RedisURL, if set, upgrades realtime fan-out from single-process
+	// (the default — see internal/realtime's package doc) to
+	// cross-process via Redis pub/sub (internal/realtime.RedisRelay) —
+	// the fix for spec/realtime.md's documented v1 limit. A
+	// redis://[:password@]host:port[/db] connection string; empty means
+	// "just this one process," which is what most deployments want.
+	RedisURL string
 }
 
 func Load() Config {
@@ -64,6 +72,7 @@ func Load() Config {
 		SessionCleanupInterval: getEnvSeconds("MAUBASE_SESSION_CLEANUP_INTERVAL_SECONDS", time.Hour),
 		StorageDir:             getEnv("MAUBASE_STORAGE_DIR", "data/storage"),
 		MaxUploadBytes:         int64(getEnvInt("MAUBASE_MAX_UPLOAD_MB", 25)) * 1024 * 1024,
+		RedisURL:               getEnv("MAUBASE_REDIS_URL", ""),
 	}
 }
 
