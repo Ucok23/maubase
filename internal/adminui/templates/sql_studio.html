@@ -1,0 +1,29 @@
+{{define "sql_studio"}}{{template "header" .}}
+<div class="alert alert-info">Runs directly against the database — every table, including internal ones. One statement per run. Owner-only, and every run is recorded to the audit log.</div>
+{{if .Error}}<div class="alert">{{.Error}}</div>{{end}}
+
+<form method="POST" action="/admin/ui/sql">
+<textarea class="sql-editor" name="query" spellcheck="false" placeholder="select * from sqlite_master where type = 'table';">{{.Query}}</textarea>
+<div style="margin-top:12px"><button type="submit" class="btn btn-primary">Run query</button></div>
+</form>
+
+{{if .Executed}}
+<p class="sql-result-meta">{{.Affected}} row(s) affected.</p>
+{{end}}
+
+{{if .Columns}}
+<p class="sql-result-meta">{{.RowCount}} row(s) returned.</p>
+<div class="table-wrap">
+<table class="data-table">
+<thead><tr>{{range .Columns}}<th>{{.}}</th>{{end}}</tr></thead>
+<tbody>
+{{range .Rows}}
+<tr>{{range .}}<td>{{.}}</td>{{end}}</tr>
+{{end}}
+</tbody>
+</table>
+</div>
+{{else if not .Executed}}{{if not .Error}}
+<p class="sql-result-meta">No results yet.</p>
+{{end}}{{end}}
+{{template "footer" .}}{{end}}

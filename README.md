@@ -141,19 +141,39 @@ What's here now (v1, step 1 of the roadmap):
   that collection's changes either (spec/realtime.md RT-06).
 
 - Embedded admin UI (`internal/adminui`, `spec/admin-ui.md`): server-
-  rendered HTML under `/admin/ui/*` — login, dashboard, owner management,
-  audit log, a "purge expired sessions" button, and a data browser — using
-  the same owner-plane session cookie and roles the JSON `/admin/*` API
-  already enforces. No JS build step: `html/template` plus a vendored
-  htmx.js/Pico.css, both `go:embed`'d, the same "no asset pipeline"
-  approach `internal/oauth`'s login/consent screens already took. The
-  data browser is a deliberately different surface from
-  `/api/data/{table}`: unscoped by `owner_id` (an owner sees every row,
-  not just "their own") and unaffected by `_policies` entirely — those
-  govern only the customer-facing, OAuth-token-authenticated path, never
-  the owner plane's own direct access to its database. Viewing needs
-  `viewer`+; creating/editing/deleting rows (including reassigning a
-  row's `owner_id` directly, an admin-only capability) needs `developer`+.
+  rendered HTML under `/admin/ui/*` — login, dashboard, member management
+  ("Members" in the UI; the underlying JSON API and `internal/ownerauth`
+  keep the `owner`-plane naming, since that's the role hierarchy's actual
+  top role, not the account list itself), audit log, a "purge expired
+  sessions" button, a data browser, and SQL Studio — using the same
+  owner-plane session cookie and roles the JSON `/admin/*` API already
+  enforces. No JS build step: `html/template` plus a vendored htmx.js and
+  a hand-written `admin.css`, both `go:embed`'d — the "no asset pipeline"
+  approach `internal/oauth`'s login/consent screens took, with a real
+  design pass on top (dark sidebar, styled tables/forms/badges) instead
+  of bare HTML.
+  - **Data browser**: a deliberately different surface from
+    `/api/data/{table}` — unscoped by `owner_id` (an owner sees every
+    row, not just "their own") and unaffected by `_policies` entirely,
+    since those govern only the customer-facing OAuth-token-
+    authenticated path. Viewing needs `viewer`+; creating/editing/
+    deleting rows (including reassigning a row's `owner_id` directly, an
+    admin-only capability) needs `developer`+.
+  - **Create table** (`/admin/ui/tables/new`, `developer`+): the dynamic
+    schema-creation API auto-REST's own docs used to say didn't exist —
+    name a table, optionally check "row-scoped" (adds a real `owner_id`
+    column), define columns (name/type/required), and it's live at
+    `/admin/ui/data/{name}` and `/api/data/{name}` immediately, no
+    restart. `internal/restapi.Server.ReloadSchema` (an atomically
+    swapped-in fresh `Discover`) is what makes that possible — the
+    registry stopped being fixed-at-startup once this needed to change
+    it at runtime.
+  - **SQL Studio** (`/admin/ui/sql`, `owner`-only): unrestricted raw SQL
+    against the whole database, including internal tables — meaningfully
+    more dangerous than anything else here, so it's gated a tier above
+    Members/Audit-log/Maintenance, and every run (success or failure) is
+    audit-logged. A `CREATE`/`ALTER`/`DROP` run here reloads the schema
+    too, same as the create-table form.
 
 ## Not yet built (see roadmap)
 

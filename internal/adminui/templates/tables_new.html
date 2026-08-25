@@ -1,0 +1,35 @@
+{{define "column_row"}}
+<div class="column-row">
+<input type="text" name="col_name_{{.N}}" placeholder="column_name" class="col-name">
+<select name="col_type_{{.N}}" class="col-type">
+{{range .ColumnTypes}}<option value="{{.}}">{{.}}</option>{{end}}
+</select>
+<label class="col-required"><input type="checkbox" name="col_required_{{.N}}" value="1"> required</label>
+</div>
+{{end}}
+
+{{define "column_row_fragment"}}{{template "column_row" .}}
+<button type="button" id="add-col-btn" class="btn btn-outline btn-sm" hx-swap-oob="true"
+  hx-get="/admin/ui/tables/new/column-row?n={{.Next}}" hx-target="#columns" hx-swap="beforeend">+ Add column</button>
+{{end}}
+
+{{define "tables_new"}}{{template "header" .}}
+<p class="meta-line"><a href="/admin/ui/data">← all collections</a></p>
+{{if .Error}}<div class="alert">{{.Error}}</div>{{end}}
+<form method="POST" action="/admin/ui/tables" class="form-card" style="max-width:640px">
+<div class="field"><label>Table name</label><input type="text" name="name" placeholder="e.g. posts" required pattern="[a-z][a-z0-9_]*" title="lowercase letters, digits, underscores; must start with a letter"></div>
+<div class="field"><label><input type="checkbox" name="owner_scoped" value="1" style="width:auto;margin-right:6px"> Row-scoped to a token subject (adds an <code>owner_id</code> column)</label></div>
+
+<label style="display:block;font-size:12.5px;font-weight:600;margin:16px 0 8px;color:var(--text-muted)">Columns <span style="font-weight:400">(every table also gets an <code>id</code> primary key automatically)</span></label>
+<div id="columns">
+{{$types := .ColumnTypes}}
+{{range .InitialColumns}}{{template "column_row" (dict "N" . "ColumnTypes" $types)}}{{end}}
+</div>
+<button type="button" id="add-col-btn" class="btn btn-outline btn-sm"
+  hx-get="/admin/ui/tables/new/column-row?n={{.NextIndex}}" hx-target="#columns" hx-swap="beforeend">+ Add column</button>
+
+<div style="margin-top:20px">
+<button type="submit" class="btn btn-primary">Create table</button>
+</div>
+</form>
+{{template "footer" .}}{{end}}

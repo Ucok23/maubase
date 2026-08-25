@@ -141,3 +141,101 @@ when a developer+ owner performs that same operation through
 then it succeeds normally — `_policies` rules apply only to
 `/api/data/*`'s OAuth-token-authenticated callers, never to the owner
 plane's own direct access to its database.
+
+## Create table (`/admin/ui/tables/new`, developer+ — same tier as writing existing rows)
+
+Auto-REST's own docs (`spec/auto-rest.md`) say adding a table is only
+possible via a deployment's own migrations, with "no dynamic
+schema-creation API in v1." This is that API, scoped to the admin UI:
+creating a table here is exactly equivalent to a deployer writing a
+`CREATE TABLE` migration by hand — same schema shape (a TEXT `id`
+primary key on every table, the same `owner_id` convention for row
+scoping), same discovery mechanism, just triggered from a form instead
+of a file. `internal/restapi.Server.ReloadSchema` (a fresh `Discover`
+swapped in atomically) is what makes the result visible without a
+restart — see its doc comment.
+
+## ADMINUI-21: A developer+ owner can create a table from the UI, live
+Given the "new table" form (a name, an optional "row-scoped" checkbox,
+and zero or more column name/type/required rows),
+when a developer+ owner submits it,
+then the table exists immediately: it appears in `/admin/ui/data`'s
+collection list, is browsable/writable at `/admin/ui/data/{name}`, and
+is exposed at `/api/data/{name}` too — no restart required.
+
+## ADMINUI-22: The "row-scoped" checkbox adds a real owner_id column
+Given the create-table form with "row-scoped" checked,
+when the table is created,
+then it has an `owner_id` column and behaves exactly like any other
+owner-scoped auto-REST table afterward (default `owner` rule on every
+operation, per spec/access-rules.md) — this isn't a special case, it's
+the same `owner_id`-column convention every other table already uses.
+
+## ADMINUI-23: An invalid or colliding table name is rejected, not silently applied
+Given the create-table form,
+when the submitted name isn't a valid identifier (doesn't start with a
+letter, or contains anything besides lowercase letters/digits/
+underscores) or names one of baas's own reserved/internal tables,
+then no table is created and the form re-shows with an error explaining
+why.
+
+## ADMINUI-24: A viewer can't create a table
+Given a `viewer`-role owner,
+when they visit `/admin/ui/tables/new` or `POST /admin/ui/tables`
+directly,
+then both get `403` — the same write-tier gating (developer+) as every
+other write in the data browser.
+
+## SQL Studio (`/admin/ui/sql`, owner-only)
+
+Unrestricted raw SQL against the whole database — every table, including
+`sessions`, `oauth_clients`, and every other internal table the data
+browser and auto-REST both deliberately hide. Meaningfully more
+dangerous than anything else in the admin UI, so it's gated to `owner`
+rather than `admin`+ like the rest of that tier, and every run is
+audit-logged regardless of outcome. One statement per run in v1 — a
+simple leading-keyword heuristic (`SELECT`/`PRAGMA`/`EXPLAIN`/`WITH` vs.
+everything else) decides whether it's run as a query (rows back) or an
+exec (a rows-affected count back), not a real SQL parser.
+
+## ADMINUI-16: Only an owner-role account can open SQL Studio
+Given a signed-in owner-plane account below role `owner` (viewer,
+developer, or admin),
+when they visit `GET /admin/ui/sql` or `POST /admin/ui/sql`,
+then both get `403` — distinct from every other admin-only page here,
+which only requires `admin`+.
+
+## ADMINUI-17: A SELECT shows its result rows
+Given the SQL Studio page,
+when an owner runs a `SELECT` (or `PRAGMA`/`EXPLAIN`/a `WITH` query),
+then the response shows the returned rows in a table, with the query's
+own column names as headers and a row count.
+
+## ADMINUI-18: A schema-changing statement takes effect immediately, everywhere
+Given the SQL Studio page,
+when an owner runs `CREATE TABLE`, `ALTER TABLE`, `DROP TABLE`, or any
+other DDL,
+then it executes (showing rows-affected, same as any other mutation),
+and the change is immediately visible in `/admin/ui/data` and at
+`/api/data/*` — the same `ReloadSchema` the create-table form triggers
+runs after every SQL Studio statement, so nothing here needs a restart
+to take effect either (ADMINUI-21's "live" guarantee, extended to raw
+SQL).
+
+## ADMINUI-19: A query error is shown inline, not a 500
+Given the SQL Studio page,
+when the submitted statement is invalid or fails (bad syntax, no such
+table, a constraint violation),
+then the response is `200` with the database's error message shown on
+the page — the page itself still renders, the caller isn't just left
+looking at a generic error.
+
+## ADMINUI-20: Every run is recorded to the audit log, regardless of outcome
+Given the SQL Studio page,
+when an owner submits any statement — whether it succeeds or errors,
+whether it's a read or a write,
+then a `sql_executed` entry appears in `GET /admin/audit-log` naming
+that owner as actor and carrying the statement text (truncated if very
+long) — unlike every other audited action here, which only logs the
+consequential ones, raw SQL logs every attempt, since the point is a
+complete record of who ran what against the database directly.

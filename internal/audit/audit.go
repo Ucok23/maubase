@@ -30,6 +30,7 @@ const (
 	EventOwnerCreate    = "owner_create"
 	EventOwnerDelete    = "owner_delete"
 	EventSessionsPurged = "sessions_purged"
+	EventSQLExecuted    = "sql_executed"
 )
 
 // Actor identifies who performed an action. A failed login has no known

@@ -365,3 +365,220 @@ func doGetNoRedirect(t *testing.T, client *http.Client, url string) *http.Respon
 	}
 	return resp
 }
+
+func TestAdminUI_CreateTableAppearsLiveEverywhere(t *testing.T) {
+	// ADMINUI-21
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	resp, err := owner.PostForm(baseURL+"/admin/ui/tables", url.Values{
+		"name":           {"widgets"},
+		"col_name_0":     {"label"},
+		"col_type_0":     {"TEXT"},
+		"col_required_0": {"1"},
+	})
+	if err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("create table: want 303, got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+
+	collections := doGetNoRedirect(t, owner, baseURL+"/admin/ui/data")
+	if !strings.Contains(bodyString(t, collections), `href="/admin/ui/data/widgets"`) {
+		t.Fatalf("want widgets in the collection list right after creation, no restart")
+	}
+
+	rows := doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/widgets")
+	if rows.StatusCode != http.StatusOK {
+		t.Fatalf("browse the new table: want 200, got %d", rows.StatusCode)
+	}
+	if !strings.Contains(bodyString(t, rows), "label") {
+		t.Fatalf("want the label column in the new table's browser")
+	}
+
+	// Also live at /api/data/widgets, same as any other collection.
+	token := restToken(t, baseURL, "adminui-widgets@example.com", []string{"records:read"})
+	apiResp := doAuthed(t, http.MethodGet, baseURL+"/api/data/widgets", token, nil)
+	if apiResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/data/widgets: want 200, got %d", apiResp.StatusCode)
+	}
+}
+
+func TestAdminUI_CreateTableOwnerScopedAddsOwnerColumn(t *testing.T) {
+	// ADMINUI-22
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	resp, err := owner.PostForm(baseURL+"/admin/ui/tables", url.Values{
+		"name": {"scoped_things"}, "owner_scoped": {"1"},
+	})
+	if err != nil || resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("create table: %v (status %d)", err, resp.StatusCode)
+	}
+
+	tokenA := restToken(t, baseURL, "adminui-scoped-a@example.com", []string{"records:read", "records:write"})
+	tokenB := restToken(t, baseURL, "adminui-scoped-b@example.com", []string{"records:read"})
+
+	createResp := doAuthed(t, http.MethodPost, baseURL+"/api/data/scoped_things", tokenA, map[string]any{})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create via customer API: want 201, got %d: %s", createResp.StatusCode, bodyString(t, createResp))
+	}
+	created := decodeJSONMap(t, createResp)
+	id, _ := created["id"].(string)
+
+	// Behaves like any other owner-scoped table: invisible to a
+	// different customer token.
+	bGet := doAuthed(t, http.MethodGet, baseURL+"/api/data/scoped_things/"+id, tokenB, nil)
+	if bGet.StatusCode != http.StatusNotFound {
+		t.Fatalf("other user get: want 404 (real owner_id scoping), got %d", bGet.StatusCode)
+	}
+}
+
+func TestAdminUI_CreateTableRejectsInvalidOrReservedNames(t *testing.T) {
+	// ADMINUI-23
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	for _, name := range []string{"Bad-Name", "1starts_with_digit", "sessions", "_policies"} {
+		resp, err := owner.PostForm(baseURL+"/admin/ui/tables", url.Values{"name": {name}})
+		if err != nil {
+			t.Fatalf("create table %q: %v", name, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("create table %q: want 200 (form re-shown with error), got %d", name, resp.StatusCode)
+		}
+		if !strings.Contains(bodyString(t, resp), "alert") {
+			t.Fatalf("create table %q: want an error shown, got no alert", name)
+		}
+	}
+}
+
+func TestAdminUI_ViewerCannotCreateTable(t *testing.T) {
+	// ADMINUI-24
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	createOwner(t, owner, baseURL, "adminui-viewer3@example.com", "viewerpassword3", "viewer")
+
+	viewer := newClient(t)
+	adminUILogin(t, viewer, baseURL, "adminui-viewer3@example.com", "viewerpassword3")
+
+	getResp := doGetNoRedirect(t, viewer, baseURL+"/admin/ui/tables/new")
+	if getResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("viewer GET /admin/ui/tables/new: want 403, got %d", getResp.StatusCode)
+	}
+	postResp, err := viewer.PostForm(baseURL+"/admin/ui/tables", url.Values{"name": {"nope"}})
+	if err != nil {
+		t.Fatalf("viewer create table: %v", err)
+	}
+	if postResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("viewer POST /admin/ui/tables: want 403, got %d", postResp.StatusCode)
+	}
+}
+
+func TestAdminUI_SQLStudioRequiresOwnerRole(t *testing.T) {
+	// ADMINUI-16
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	createOwner(t, owner, baseURL, "adminui-admin2@example.com", "adminpassword2", "admin")
+
+	admin := newClient(t)
+	adminUILogin(t, admin, baseURL, "adminui-admin2@example.com", "adminpassword2")
+
+	getResp := doGetNoRedirect(t, admin, baseURL+"/admin/ui/sql")
+	if getResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("admin-role GET /admin/ui/sql: want 403, got %d", getResp.StatusCode)
+	}
+	postResp, err := admin.PostForm(baseURL+"/admin/ui/sql", url.Values{"query": {"select 1"}})
+	if err != nil {
+		t.Fatalf("admin-role run query: %v", err)
+	}
+	if postResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("admin-role POST /admin/ui/sql: want 403, got %d", postResp.StatusCode)
+	}
+}
+
+func TestAdminUI_SQLStudioSelectShowsRows(t *testing.T) {
+	// ADMINUI-17
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		Schema: []string{notesSchema},
+	})
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	owner.PostForm(baseURL+"/admin/ui/data/notes", url.Values{"title": {"sql-visible"}, "body": {"x"}, "owner_id": {"x"}})
+
+	resp, err := owner.PostForm(baseURL+"/admin/ui/sql", url.Values{"query": {"select title from notes"}})
+	if err != nil {
+		t.Fatalf("run select: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("run select: want 200, got %d", resp.StatusCode)
+	}
+	body := bodyString(t, resp)
+	if !strings.Contains(body, "sql-visible") || !strings.Contains(body, "<th>title</th>") {
+		t.Fatalf("want the query's rows and column header shown, got: %s", body)
+	}
+}
+
+func TestAdminUI_SQLStudioDDLTakesEffectImmediately(t *testing.T) {
+	// ADMINUI-18
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	resp, err := owner.PostForm(baseURL+"/admin/ui/sql", url.Values{
+		"query": {`CREATE TABLE gadgets (id TEXT PRIMARY KEY, name TEXT NOT NULL)`},
+	})
+	if err != nil {
+		t.Fatalf("run DDL: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("run DDL: want 200, got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+
+	collections := doGetNoRedirect(t, owner, baseURL+"/admin/ui/data")
+	if !strings.Contains(bodyString(t, collections), `href="/admin/ui/data/gadgets"`) {
+		t.Fatalf("want gadgets in the collection list right after a DDL run through SQL Studio")
+	}
+}
+
+func TestAdminUI_SQLStudioErrorShownInline(t *testing.T) {
+	// ADMINUI-19
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	resp, err := owner.PostForm(baseURL+"/admin/ui/sql", url.Values{"query": {"select * from no_such_table"}})
+	if err != nil {
+		t.Fatalf("run bad query: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("run bad query: want 200 (error shown inline, not a 500), got %d", resp.StatusCode)
+	}
+	if !strings.Contains(bodyString(t, resp), "no such table") {
+		t.Fatalf("want the database error message shown, got: %s", bodyString(t, resp))
+	}
+}
+
+func TestAdminUI_SQLStudioAuditsEveryRun(t *testing.T) {
+	// ADMINUI-20
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	// One successful run, one failing run — both should be logged.
+	owner.PostForm(baseURL+"/admin/ui/sql", url.Values{"query": {"select 1"}})
+	owner.PostForm(baseURL+"/admin/ui/sql", url.Values{"query": {"select * from no_such_table"}})
+
+	resp := doGetNoRedirect(t, owner, baseURL+"/admin/ui/audit-log")
+	body := bodyString(t, resp)
+	if strings.Count(body, "sql_executed") < 2 {
+		t.Fatalf("want at least 2 sql_executed audit entries, got: %s", body)
+	}
+}

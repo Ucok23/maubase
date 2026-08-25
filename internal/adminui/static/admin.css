@@ -269,6 +269,32 @@ table.data-table { width: 100%; border-collapse: collapse; font-size: 13.5px; wh
 .stack { display: flex; flex-direction: column; gap: 10px; }
 .hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
 
+/* --- create table / column rows ------------------------------------------- */
+
+.column-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.column-row .col-name { flex: 2; }
+.column-row .col-type { flex: 1; }
+.column-row .col-required { display: flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 12.5px; color: var(--text-muted); }
+.column-row .col-required input { width: auto; }
+
+/* --- SQL Studio ------------------------------------------------------------ */
+
+.sql-editor {
+  width: 100%;
+  min-height: 160px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: #0f1117;
+  color: #e3e6ea;
+  resize: vertical;
+  tab-size: 2;
+}
+.sql-editor:focus { outline: none; border-color: var(--accent); }
+.sql-result-meta { font-size: 12.5px; color: var(--text-muted); margin: 12px 0; }
+
 .login-shell {
   min-height: 100vh;
   display: flex;

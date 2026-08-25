@@ -1,4 +1,5 @@
 {{define "data_collections"}}{{template "header" .}}
+{{if .CanWrite}}<p><a href="/admin/ui/tables/new" class="btn btn-primary btn-sm">+ New table</a></p>{{end}}
 {{if .Collections}}
 <div class="card-grid">
 {{range .Collections}}
