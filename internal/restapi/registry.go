@@ -22,15 +22,36 @@ const OwnerColumnName = "owner_id"
 // never exposed through auto-REST regardless of caller or token, so an
 // access token can never end up querying sessions or OAuth client secrets
 // through this layer.
+//
+// SECURITY: this list must be kept in sync with every table
+// internal/db/migrations creates, by hand, every time a migration adds
+// one — there is no structural mechanism forcing that (see
+// TestRestAPI_NoAppSchemaExposesNothing in test/restapi_test.go, which
+// exists specifically to catch the day this list is forgotten again:
+// it fails loudly if maubase's own migrations ever produce a table this
+// map doesn't know about, rather than silently exposing it). Two tables
+// — password_reset_tokens, social_identities (migrations 0007/0008) —
+// shipped without being added here, and were exposed as ordinary
+// shared collections at /api/data/password_reset_tokens and
+// /api/data/social_identities to any caller holding a routine
+// records:write token: readable (a full account-enumeration/PII leak:
+// every user_id, email, and reset-token hash in the deployment) and
+// writable (an attacker could POST a forged password_reset_tokens row
+// naming any victim's real user_id and a token hash of their own
+// choosing, then redeem it via the real POST /api/auth/reset-password
+// — a complete, unauthenticated-relative-to-the-victim account
+// takeover). Fixed here; see the git history for the incident.
 var reservedTables = map[string]bool{
 	"users": true, "sessions": true,
 	"oauth_clients": true, "oauth_client_jti": true, "oauth_authorize_codes": true,
 	"oauth_access_tokens": true, "oauth_refresh_tokens": true, "oauth_pkce_requests": true,
 	"oauth_consents": true, "oauth_signing_keys": true, "oauth_hmac_secret": true,
 	"owner_users": true, "owner_sessions": true, "owner_audit_log": true,
-	"schema_migrations": true,
-	"files":             true,
-	"_policies":         true,
+	"schema_migrations":     true,
+	"files":                 true,
+	"_policies":             true,
+	"password_reset_tokens": true,
+	"social_identities":     true,
 }
 
 // Rule is one of a closed vocabulary of per-operation access rules a
