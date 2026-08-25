@@ -32,9 +32,24 @@ func (s *Server) AdminCollection(name string) (*Collection, bool) {
 }
 
 // AdminListRows returns every row in col, unfiltered by owner_id,
-// paginated.
-func (s *Server) AdminListRows(ctx context.Context, col *Collection, limit, offset int) ([]map[string]any, error) {
-	query := fmt.Sprintf("SELECT * FROM %s ORDER BY %s LIMIT ? OFFSET ?", quoteIdent(col.Name), quoteIdent(col.PKColumn))
+// paginated, ordered by sortCol/sortDir. sortCol is validated against
+// col's own columns rather than trusted as-is — unlike every other
+// identifier this package quotes, it ultimately comes off a query
+// string a human can edit by hand, not a fixed migration or a name
+// AdminCreateTable already validated — falling back to the primary key
+// if it isn't a real column name (including "", the common case: no
+// sort requested yet). sortDir is normalized to ASC unless it's
+// case-insensitively "desc".
+func (s *Server) AdminListRows(ctx context.Context, col *Collection, limit, offset int, sortCol, sortDir string) ([]map[string]any, error) {
+	orderCol := col.PKColumn
+	if col.HasColumn(sortCol) {
+		orderCol = sortCol
+	}
+	dir := "ASC"
+	if strings.EqualFold(sortDir, "desc") {
+		dir = "DESC"
+	}
+	query := fmt.Sprintf("SELECT * FROM %s ORDER BY %s %s LIMIT ? OFFSET ?", quoteIdent(col.Name), quoteIdent(orderCol), dir)
 	rows, err := s.db.QueryContext(ctx, query, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("list rows: %w", err)

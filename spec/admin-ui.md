@@ -213,6 +213,32 @@ to the caller's own subject. This is a deliberate admin-only capability:
 reassigning a row's ownership isn't something the customer-facing API
 ever allows.
 
+## ADMINUI-32: Editing a row can happen inline, without leaving the list
+Given the data browser for a collection,
+when a developer+ owner submits an in-place edit via `POST
+/admin/ui/data/{collection}/{id}` as an htmx request (an `HX-Request`
+header present — the inline "Save" control on the row itself, as opposed
+to the standalone edit page's plain form submission),
+then the response is the row's own updated `<tr>` markup, not a redirect
+— enough for the row to be swapped back into the table in place. A
+non-htmx request to the same route (the full-page edit form, still
+reachable directly, as a no-JS fallback) still gets the existing
+redirect-to-the-list behavior (ADMINUI-13 is otherwise unaffected: same
+authorization, same result). A column holding SQL `NULL` renders as a
+distinct, visibly-not-blank marker in the row display, so it can't be
+mistaken for an empty string.
+
+## ADMINUI-33: Column headers sort the row listing
+Given the data browser for a collection,
+when a viewer+ owner requests `/admin/ui/data/{collection}?sort={column}&dir=desc`
+naming one of that collection's real columns,
+then rows come back ordered by that column, descending (ascending is the
+default whenever `dir` isn't exactly `desc`) — clicking a column header
+is this same request, not a separate mechanism. A `sort` value that
+isn't one of the collection's actual columns is ignored rather than
+erroring, falling back to the collection's default order (its primary
+key).
+
 ## ADMINUI-14: A viewer-role owner can read but not write
 Given the data browser,
 when a `viewer`-role owner visits it,

@@ -877,3 +877,153 @@ func TestAdminUI_SidebarHidesLinksAboveRole(t *testing.T) {
 		t.Fatalf("viewer GET /admin/ui/owners directly: want 403, got %d", direct.StatusCode)
 	}
 }
+
+// --- data browser: inline editing, NULL display, sorting -------------------
+
+func TestAdminUI_InlineEditReturnsRowFragmentNotRedirect(t *testing.T) {
+	// ADMINUI-32
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		Schema: []string{notesSchema},
+	})
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	createResp, err := owner.PostForm(baseURL+"/admin/ui/data/notes", url.Values{
+		"title": {"original"}, "body": {"x"}, "owner_id": {"user-a"},
+	})
+	if err != nil {
+		t.Fatalf("create row: %v", err)
+	}
+	rowsBody := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes"))
+	id := idFromRowHTML(t, rowsBody, "original")
+	_ = createResp
+
+	// The edit-row fragment (what htmx's "Edit" swaps in) is just the
+	// <tr>, not a full page.
+	editRowResp := doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes/"+id+"/edit-row")
+	if editRowResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET edit-row: want 200, got %d", editRowResp.StatusCode)
+	}
+	editRowBody := bodyString(t, editRowResp)
+	if strings.Contains(editRowBody, "<html") {
+		t.Fatalf("want a bare <tr> fragment from edit-row, got a full page: %s", editRowBody)
+	}
+	if !strings.Contains(editRowBody, `name="title"`) {
+		t.Fatalf("want an editable title input in the fragment, got: %s", editRowBody)
+	}
+
+	// An htmx POST (HX-Request header set) gets the updated row's <tr>
+	// back, not a redirect.
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/admin/ui/data/notes/"+id,
+		strings.NewReader(url.Values{"title": {"edited"}, "body": {"x"}, "owner_id": {"user-a"}}.Encode()))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	resp, err := owner.Do(req)
+	if err != nil {
+		t.Fatalf("htmx update: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("htmx update: want 200 (row fragment), got %d", resp.StatusCode)
+	}
+	body := bodyString(t, resp)
+	if strings.Contains(body, "<html") {
+		t.Fatalf("want a bare <tr> fragment back, got a full page: %s", body)
+	}
+	if !strings.Contains(body, "edited") {
+		t.Fatalf("want the updated value in the returned fragment, got: %s", body)
+	}
+
+	// A non-htmx POST to the same route (the full-page form) still
+	// redirects, per ADMINUI-13's existing behavior.
+	plain, err := owner.PostForm(baseURL+"/admin/ui/data/notes/"+id, url.Values{
+		"title": {"edited again"}, "body": {"x"}, "owner_id": {"user-a"},
+	})
+	if err != nil {
+		t.Fatalf("plain update: %v", err)
+	}
+	if plain.StatusCode != http.StatusSeeOther {
+		t.Fatalf("plain update: want 303, got %d", plain.StatusCode)
+	}
+}
+
+func TestAdminUI_NullColumnShownDistinctlyFromEmptyString(t *testing.T) {
+	// ADMINUI-32
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		Schema: []string{notesSchema},
+	})
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	// body is nullable and left out of the form entirely, so it's
+	// inserted as SQL NULL, not "".
+	if _, err := owner.PostForm(baseURL+"/admin/ui/data/notes", url.Values{
+		"title": {"no body"}, "owner_id": {"user-a"},
+	}); err != nil {
+		t.Fatalf("create row: %v", err)
+	}
+
+	body := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes"))
+	if !strings.Contains(body, `class="null-cell"`) {
+		t.Fatalf("want a NULL body column rendered with a distinct marker, got: %s", body)
+	}
+}
+
+func TestAdminUI_SortsRowsByColumn(t *testing.T) {
+	// ADMINUI-33
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		Schema: []string{notesSchema},
+	})
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	for _, title := range []string{"bravo", "alpha", "charlie"} {
+		if _, err := owner.PostForm(baseURL+"/admin/ui/data/notes", url.Values{
+			"title": {title}, "body": {"x"}, "owner_id": {"user-a"},
+		}); err != nil {
+			t.Fatalf("create row %q: %v", title, err)
+		}
+	}
+
+	asc := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes?sort=title&dir=asc"))
+	if i, j, k := strings.Index(asc, "alpha"), strings.Index(asc, "bravo"), strings.Index(asc, "charlie"); !(i < j && j < k) {
+		t.Fatalf("want alpha < bravo < charlie in ascending order, got positions %d,%d,%d in: %s", i, j, k, asc)
+	}
+
+	desc := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes?sort=title&dir=desc"))
+	if i, j, k := strings.Index(desc, "charlie"), strings.Index(desc, "bravo"), strings.Index(desc, "alpha"); !(i < j && j < k) {
+		t.Fatalf("want charlie < bravo < alpha in descending order, got positions %d,%d,%d in: %s", i, j, k, desc)
+	}
+
+	// An unknown sort column is ignored, not an error.
+	fallback := doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes?sort=not_a_real_column")
+	if fallback.StatusCode != http.StatusOK {
+		t.Fatalf("bogus sort column: want 200 (falls back to default order), got %d", fallback.StatusCode)
+	}
+}
+
+// idFromRowHTML extracts the id chi assigned a newly created row from its
+// id="row-{id}" attribute in a rendered data_rows page, by finding the
+// <tr> whose text contains marker.
+func idFromRowHTML(t *testing.T, html, marker string) string {
+	t.Helper()
+	idx := strings.Index(html, marker)
+	if idx < 0 {
+		t.Fatalf("marker %q not found in: %s", marker, html)
+	}
+	rowStart := strings.LastIndex(html[:idx], `id="row-`)
+	if rowStart < 0 {
+		t.Fatalf("no id=\"row-...\" before marker %q in: %s", marker, html)
+	}
+	rest := html[rowStart+len(`id="row-`):]
+	end := strings.IndexByte(rest, '"')
+	if end < 0 {
+		t.Fatalf("malformed row id near marker %q in: %s", marker, html)
+	}
+	return rest[:end]
+}

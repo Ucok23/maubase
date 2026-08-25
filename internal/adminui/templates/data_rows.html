@@ -1,24 +1,23 @@
-{{define "data_rows"}}{{template "header" .}}
-<p class="meta-line"><a href="/admin/ui/data">← all collections</a> · every row, regardless of owner · {{.Total}} total</p>
-
-{{if .Rows}}
-<div class="table-wrap">
-<table class="data-table">
-<thead><tr>
-{{range .Collection.Columns}}<th>{{.Name}}</th>{{end}}
-{{if .CanWrite}}<th></th>{{end}}
-</tr></thead>
-<tbody>
-{{$root := .}}
-{{range .Rows}}
-{{$row := .}}
-<tr id="row-{{index $row $root.Collection.PKColumn}}">
-{{range $root.Collection.Columns}}<td{{if .IsPK}} class="id-cell"{{end}}>{{index $row .Name}}</td>{{end}}
-{{if $root.CanWrite}}
+{{/* One row's normal (non-editing) display state — shared by the list
+     below, by handleDataRowFragment (an inline edit's Cancel button),
+     and by handleDataUpdate (what a successful Save swaps back to), so
+     there's exactly one place this markup is defined. Takes a dict:
+     Collection, Row, CanWrite. */}}
+{{define "data_row"}}
+{{$col := .Collection}}
+{{$row := .Row}}
+<tr id="row-{{index $row $col.PKColumn}}">
+{{range $col.Columns}}
+<td{{if .IsPK}} class="id-cell"{{end}}>{{if isNull (index $row .Name)}}<span class="null-cell">NULL</span>{{else}}{{index $row .Name}}{{end}}</td>
+{{end}}
+{{if $.CanWrite}}
 <td class="actions">
-<a href="/admin/ui/data/{{$root.Collection.Name}}/{{index $row $root.Collection.PKColumn}}/edit" class="btn btn-outline btn-sm">Edit</a>
-<form hx-post="/admin/ui/data/{{$root.Collection.Name}}/{{index $row $root.Collection.PKColumn}}/delete"
-      hx-target="#row-{{index $row $root.Collection.PKColumn}}" hx-swap="outerHTML" hx-confirm="Delete this row?"
+<a href="/admin/ui/data/{{$col.Name}}/{{index $row $col.PKColumn}}/edit"
+   hx-get="/admin/ui/data/{{$col.Name}}/{{index $row $col.PKColumn}}/edit-row"
+   hx-target="#row-{{index $row $col.PKColumn}}" hx-swap="outerHTML"
+   class="btn btn-outline btn-sm">Edit</a>
+<form hx-post="/admin/ui/data/{{$col.Name}}/{{index $row $col.PKColumn}}/delete"
+      hx-target="#row-{{index $row $col.PKColumn}}" hx-swap="outerHTML" hx-confirm="Delete this row?"
       style="display:inline">
 <button type="submit" class="btn btn-danger btn-sm">Delete</button>
 </form>
@@ -26,6 +25,52 @@
 {{end}}
 </tr>
 {{end}}
+
+{{/* The same row, inline-editable — what "Edit" swaps in via htmx (the
+     plain href it also carries still reaches the full-page form at
+     .../edit for a no-JS visitor). Save posts the update and swaps back
+     to "data_row" above; Cancel just re-fetches "data_row" unchanged.
+     Takes a dict: Collection, Row. */}}
+{{define "data_row_edit_inline"}}
+{{$col := .Collection}}
+{{$row := .Row}}
+<tr id="row-{{index $row $col.PKColumn}}">
+{{range $col.Columns}}
+{{if .IsPK}}
+<td class="id-cell">{{index $row .Name}}</td>
+{{else}}
+<td><input type="{{inputType .DeclType}}" name="{{.Name}}" value="{{index $row .Name}}"{{if .NotNull}} required{{end}}></td>
+{{end}}
+{{end}}
+<td class="actions">
+<button type="button" class="btn btn-primary btn-sm"
+        hx-post="/admin/ui/data/{{$col.Name}}/{{index $row $col.PKColumn}}"
+        hx-include="closest tr" hx-target="#row-{{index $row $col.PKColumn}}" hx-swap="outerHTML">Save</button>
+<button type="button" class="btn btn-outline btn-sm"
+        hx-get="/admin/ui/data/{{$col.Name}}/{{index $row $col.PKColumn}}/row"
+        hx-target="#row-{{index $row $col.PKColumn}}" hx-swap="outerHTML">Cancel</button>
+</td>
+</tr>
+{{end}}
+
+{{define "data_rows"}}{{template "header" .}}
+<p class="meta-line">
+<a href="/admin/ui/data">← all collections</a> · every row, regardless of owner ·
+{{if .Total}}showing {{add .Offset 1}}–{{if lt (add .Offset .Limit) .Total}}{{add .Offset .Limit}}{{else}}{{.Total}}{{end}} of {{.Total}}{{else}}0 total{{end}}
+</p>
+
+{{if .Rows}}
+<div class="table-wrap">
+<table class="data-table">
+<thead><tr>
+{{$root := .}}
+{{range .Collection.Columns}}
+<th><a class="sort-link" href="?limit={{$root.Limit}}&sort={{.Name}}&dir={{if and (eq $root.Sort .Name) (ne $root.Dir "desc")}}desc{{else}}asc{{end}}">{{.Name}}{{if eq $root.Sort .Name}}<span class="sort-arrow">{{if eq $root.Dir "desc"}} ▼{{else}} ▲{{end}}</span>{{end}}</a></th>
+{{end}}
+{{if .CanWrite}}<th></th>{{end}}
+</tr></thead>
+<tbody>
+{{range .Rows}}{{template "data_row" (dict "Collection" $root.Collection "Row" . "CanWrite" $root.CanWrite)}}{{end}}
 </tbody>
 </table>
 </div>
@@ -34,15 +79,15 @@
 {{end}}
 
 <nav class="pagination">
-{{if gt .Offset 0}}<a class="btn btn-outline btn-sm" href="?limit={{.Limit}}&offset={{sub .Offset .Limit}}">← Newer</a>{{end}}
-{{if lt (add .Offset .Limit) .Total}}<a class="btn btn-outline btn-sm" href="?limit={{.Limit}}&offset={{add .Offset .Limit}}">Older →</a>{{end}}
+{{if gt .Offset 0}}<a class="btn btn-outline btn-sm" href="?limit={{.Limit}}&offset={{sub .Offset .Limit}}&sort={{.Sort}}&dir={{.Dir}}">← Newer</a>{{end}}
+{{if lt (add .Offset .Limit) .Total}}<a class="btn btn-outline btn-sm" href="?limit={{.Limit}}&offset={{add .Offset .Limit}}&sort={{.Sort}}&dir={{.Dir}}">Older →</a>{{end}}
 </nav>
 
 {{if .CanWrite}}
 <h2>Create row</h2>
 <form method="POST" action="/admin/ui/data/{{.Collection.Name}}" class="form-card">
 {{range .Collection.Columns}}
-{{if not .IsPK}}<div class="field"><label>{{.Name}}</label><input type="text" name="{{.Name}}"></div>{{end}}
+{{if not .IsPK}}<div class="field"><label>{{.Name}}</label><input type="{{inputType .DeclType}}" name="{{.Name}}"{{if .NotNull}} required{{end}}></div>{{end}}
 {{end}}
 <button type="submit" class="btn btn-primary">Create</button>
 </form>
