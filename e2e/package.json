@@ -8,7 +8,8 @@
     "test:headed": "playwright test --headed",
     "report": "playwright show-report",
     "report:build": "node scripts/build-report.mjs",
-    "test:report": "playwright test && node scripts/build-report.mjs"
+    "open": "node scripts/open-report.mjs",
+    "test:report": "playwright test && node scripts/build-report.mjs && node scripts/open-report.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0"
