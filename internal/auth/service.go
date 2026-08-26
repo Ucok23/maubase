@@ -267,20 +267,26 @@ func (s *Service) CreateResetToken(ctx context.Context, email string) (rawToken,
 // access prompted this reset in the first place — signed out
 // everywhere, the same guarantee ownerauth's forced-reauth-adjacent
 // flows already lean on elsewhere in this codebase.
-func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword string) error {
+//
+// Returns the account's user id on success so the caller can also revoke
+// OAuth grants (internal/oauth.Server.RevokeAllForSubject) — that's the
+// caller's responsibility, not this method's, since internal/auth has no
+// dependency on internal/oauth, matching how account erasure already
+// splits the same two concerns across internal/server's handler.
+func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword string) (userID string, err error) {
 	if len(newPassword) < 8 {
-		return ErrWeakPassword
+		return "", ErrWeakPassword
 	}
 	tokenHash := hashToken(rawToken)
 
 	hash, err := hashPassword(newPassword)
 	if err != nil {
-		return fmt.Errorf("hash password: %w", err)
+		return "", fmt.Errorf("hash password: %w", err)
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
+		return "", fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeds
 
@@ -292,32 +298,35 @@ func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword strin
 	// BeginTx, as this used to) is what actually closes the race where
 	// two concurrent redemptions of the same token both pass the check
 	// before either commits its write. See PWRESET-05, PWRESET-10.
-	var id, userID string
+	var id string
 	var expiresAt time.Time
 	var usedAt sql.NullTime
 	err = tx.QueryRowContext(ctx, `
 		SELECT id, user_id, expires_at, used_at FROM password_reset_tokens WHERE token_hash = ?
 	`, tokenHash).Scan(&id, &userID, &expiresAt, &usedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ErrResetTokenInvalid
+		return "", ErrResetTokenInvalid
 	}
 	if err != nil {
-		return fmt.Errorf("lookup reset token: %w", err)
+		return "", fmt.Errorf("lookup reset token: %w", err)
 	}
 	if usedAt.Valid || time.Now().After(expiresAt) {
-		return ErrResetTokenInvalid
+		return "", ErrResetTokenInvalid
 	}
 
 	if _, err := tx.ExecContext(ctx, `UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, hash, userID); err != nil {
-		return fmt.Errorf("update password: %w", err)
+		return "", fmt.Errorf("update password: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = ?`, id); err != nil {
-		return fmt.Errorf("mark reset token used: %w", err)
+		return "", fmt.Errorf("mark reset token used: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID); err != nil {
-		return fmt.Errorf("revoke sessions: %w", err)
+		return "", fmt.Errorf("revoke sessions: %w", err)
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit: %w", err)
+	}
+	return userID, nil
 }
 
 // LoginOrCreateViaSocial resolves a successful "Continue with <provider>"

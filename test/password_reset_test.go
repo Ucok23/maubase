@@ -96,6 +96,29 @@ func TestPasswordReset_UnknownEmailLooksIdentical(t *testing.T) {
 	}
 }
 
+// TestPasswordReset_UnconfiguredEmailSenderStillLooksIdentical is
+// PWRESET-02 under the actual shipped default: no MAUBASE_RESEND_API_KEY
+// configured means email.NoopSender, whose Send always errors by design.
+// Before this test's fix, a real account then got 500 (Send's error was
+// surfaced) while an unregistered one still got 204 (Send was never
+// called) — a fresh, not-yet-configured deployment leaked its user list
+// through response codes alone, the exact enumeration PWRESET-02 exists
+// to prevent.
+func TestPasswordReset_UnconfiguredEmailSenderStillLooksIdentical(t *testing.T) {
+	baseURL := testserver.NewCustom(t, testserver.Options{EmailSender: email.NoopSender{}})
+	signUp(t, newClient(t), baseURL, "pwreset-noop@example.com", "originalpassword1")
+
+	real := forgotPassword(t, newClient(t), baseURL, "pwreset-noop@example.com")
+	if real.StatusCode != http.StatusNoContent {
+		t.Fatalf("forgot-password for a real account with no email sender configured: want 204, got %d: %s", real.StatusCode, bodyString(t, real))
+	}
+
+	fake := forgotPassword(t, newClient(t), baseURL, "no-such-account@example.com")
+	if fake.StatusCode != http.StatusNoContent {
+		t.Fatalf("forgot-password for an unknown email: want 204, got %d", fake.StatusCode)
+	}
+}
+
 func TestPasswordReset_ValidTokenChangesPasswordAndRevokesAllSessions(t *testing.T) {
 	// PWRESET-03
 	sender := email.NewFakeSender()
@@ -251,6 +274,41 @@ func TestPasswordReset_ConcurrentRedemptionOnlyOneWins(t *testing.T) {
 	}
 	if workingCount != 1 {
 		t.Fatalf("want exactly one of the two concurrently-submitted passwords to work, got %d", workingCount)
+	}
+}
+
+// TestPasswordReset_RevokesOAuthGrantsToo is PWRESET-09: resetting a
+// password used to revoke only identity-layer sessions, leaving any
+// OAuth access token issued to a third-party client while one of those
+// sessions was active fully live and usable — a real gap in the "signed
+// out everywhere" guarantee PWRESET-03 already makes for sessions,
+// mirroring the same RevokedTokenRejected pattern
+// TestOAuthResource_RevokedTokenRejected uses for explicit /oauth/revoke.
+func TestPasswordReset_RevokesOAuthGrantsToo(t *testing.T) {
+	sender := email.NewFakeSender()
+	baseURL := testserver.NewCustom(t, testserver.Options{EmailSender: sender})
+	clientID := registerPublicClient(t, baseURL, testRedirectURI, "profile")
+
+	client := newClient(t)
+	signUp(t, client, baseURL, "pwreset09@example.com", "originalpassword1")
+	tok := authorizeAndGetToken(t, client, baseURL, clientID, testRedirectURI, []string{"profile"})
+	accessToken, _ := tok["access_token"].(string)
+
+	before := mustAuthedGet(t, baseURL+"/api/oauth/whoami", accessToken)
+	if before.StatusCode != http.StatusOK {
+		t.Fatalf("setup: token should work before the reset, got %d", before.StatusCode)
+	}
+
+	forgotPassword(t, newClient(t), baseURL, "pwreset09@example.com")
+	token := tokenFromResetLink(t, sender.Sent())
+	reset := resetPassword(t, baseURL, token, "brandnewpassword1")
+	if reset.StatusCode != http.StatusNoContent {
+		t.Fatalf("reset-password: want 204, got %d: %s", reset.StatusCode, bodyString(t, reset))
+	}
+
+	after := mustAuthedGet(t, baseURL+"/api/oauth/whoami", accessToken)
+	if after.StatusCode == http.StatusOK {
+		t.Fatalf("want the OAuth access token rejected after a password reset, got 200: %s", bodyString(t, after))
 	}
 }
 
