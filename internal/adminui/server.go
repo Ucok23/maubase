@@ -198,11 +198,11 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Recorded regardless of whether the email corresponds to a real
 		// account, matching handleOwnerLogin's JSON counterpart.
-		_ = s.audit.Record(r.Context(), audit.EventLoginFailed, audit.Actor{}, audit.Target{Email: email}, nil)
+		s.audit.RecordLogged(r.Context(), audit.EventLoginFailed, audit.Actor{}, audit.Target{Email: email}, nil)
 		render(w, "login", map[string]any{"Title": "Sign in", "Error": "invalid email or password", "Email": email})
 		return
 	}
-	_ = s.audit.Record(r.Context(), audit.EventLogin, audit.Actor{ID: session.OwnerID, Email: email}, audit.Target{}, nil)
+	s.audit.RecordLogged(r.Context(), audit.EventLogin, audit.Actor{ID: session.OwnerID, Email: email}, audit.Target{}, nil)
 	ownerauth.SetCookie(w, session)
 	http.Redirect(w, r, "/admin/ui", http.StatusSeeOther)
 }
@@ -210,7 +210,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(ownerauth.SessionCookieName); err == nil {
 		if owner, err := s.ownerAuth.ValidateSession(r.Context(), c.Value); err == nil {
-			_ = s.audit.Record(r.Context(), audit.EventLogout, audit.Actor{ID: owner.ID, Email: owner.Email}, audit.Target{}, nil)
+			s.audit.RecordLogged(r.Context(), audit.EventLogout, audit.Actor{ID: owner.ID, Email: owner.Email}, audit.Target{}, nil)
 		}
 		_ = s.ownerAuth.Logout(r.Context(), c.Value)
 	}
@@ -244,7 +244,7 @@ func (s *Server) handleCreateOwner(w http.ResponseWriter, r *http.Request) {
 		s.renderOwnersWithError(w, r, actor, err)
 		return
 	}
-	_ = s.audit.Record(r.Context(), audit.EventOwnerCreate,
+	s.audit.RecordLogged(r.Context(), audit.EventOwnerCreate,
 		audit.Actor{ID: actor.ID, Email: actor.Email}, audit.Target{ID: created.ID, Email: created.Email},
 		map[string]any{"role": string(created.Role)})
 	http.Redirect(w, r, "/admin/ui/owners", http.StatusSeeOther)
@@ -257,7 +257,7 @@ func (s *Server) handleDeleteOwner(w http.ResponseWriter, r *http.Request) {
 		s.renderOwnersWithError(w, r, actor, err)
 		return
 	}
-	_ = s.audit.Record(r.Context(), audit.EventOwnerDelete,
+	s.audit.RecordLogged(r.Context(), audit.EventOwnerDelete,
 		audit.Actor{ID: actor.ID, Email: actor.Email}, audit.Target{ID: deleted.ID, Email: deleted.Email},
 		map[string]any{"role": string(deleted.Role)})
 	http.Redirect(w, r, "/admin/ui/owners", http.StatusSeeOther)
@@ -344,7 +344,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		s.renderUsersWithError(w, r, owner, err.Error())
 		return
 	}
-	_ = s.audit.Record(r.Context(), audit.EventUserCreate,
+	s.audit.RecordLogged(r.Context(), audit.EventUserCreate,
 		audit.Actor{ID: owner.ID, Email: owner.Email}, audit.Target{ID: created.ID, Email: created.Email}, nil)
 	http.Redirect(w, r, "/admin/ui/users", http.StatusSeeOther)
 }
@@ -381,7 +381,7 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delete failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = s.audit.Record(r.Context(), audit.EventUserDelete,
+	s.audit.RecordLogged(r.Context(), audit.EventUserDelete,
 		audit.Actor{ID: owner.ID, Email: owner.Email}, audit.Target{ID: user.ID, Email: user.Email}, nil)
 	http.Redirect(w, r, "/admin/ui/users", http.StatusSeeOther)
 }
@@ -401,7 +401,7 @@ func (s *Server) handleRevokeUserSessions(w http.ResponseWriter, r *http.Request
 		http.Error(w, "revoke failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = s.audit.Record(r.Context(), audit.EventUserSessionsRevoked,
+	s.audit.RecordLogged(r.Context(), audit.EventUserSessionsRevoked,
 		audit.Actor{ID: owner.ID, Email: owner.Email}, audit.Target{ID: user.ID, Email: user.Email},
 		map[string]any{"sessions_revoked": revoked})
 	http.Redirect(w, r, "/admin/ui/users/"+id, http.StatusSeeOther)
@@ -445,7 +445,7 @@ func (s *Server) handlePurgeSessions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	_ = s.audit.Record(r.Context(), audit.EventSessionsPurged, audit.Actor{ID: owner.ID, Email: owner.Email}, audit.Target{}, map[string]any{
+	s.audit.RecordLogged(r.Context(), audit.EventSessionsPurged, audit.Actor{ID: owner.ID, Email: owner.Email}, audit.Target{}, map[string]any{
 		"sessions": sessionsPurged, "owner_sessions": ownerSessionsPurged,
 	})
 	render(w, "maintenance", map[string]any{
@@ -724,7 +724,7 @@ func (s *Server) handleSQLStudioRun(w http.ResponseWriter, r *http.Request) {
 	cols, rows, affected, isQuery, err := runSQL(r.Context(), s.db, query)
 	data["DurationMS"] = time.Since(start).Milliseconds()
 
-	_ = s.audit.Record(r.Context(), audit.EventSQLExecuted,
+	s.audit.RecordLogged(r.Context(), audit.EventSQLExecuted,
 		audit.Actor{ID: owner.ID, Email: owner.Email}, audit.Target{},
 		map[string]any{"query": truncateQuery(query, 500), "ok": err == nil})
 

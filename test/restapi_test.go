@@ -126,6 +126,41 @@ func TestRestAPI_NoAppSchemaExposesNothing(t *testing.T) {
 	}
 }
 
+// TestRestAPI_CreateWithNullBodyDoesNotPanic: a literal JSON `null` body
+// decodes successfully into a nil (not empty) map — encoding/json's
+// documented behavior for a map destination — and every downstream write
+// into that map (owner-stamping, PK generation) used to panic on it. A
+// table with only nullable, defaulted, or PK columns is used deliberately
+// so the create can succeed cleanly once the nil map is fixed, isolating
+// this from the separate (tracked) issue of constraint violations
+// surfacing as 500 instead of 400.
+func TestRestAPI_CreateWithNullBodyDoesNotPanic(t *testing.T) {
+	baseURL := testserver.NewWithSchema(t, `CREATE TABLE nullable_notes (
+		id       TEXT PRIMARY KEY,
+		owner_id TEXT NOT NULL,
+		title    TEXT
+	)`)
+	token := restToken(t, baseURL, "null-body@example.com", []string{"records:read", "records:write"})
+
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/data/nullable_notes", bytes.NewReader([]byte("null")))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST with null body: %v", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("want 201 (an empty object, not a panic), got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+	rec := decodeJSONMap(t, resp)
+	if rec["id"] == nil || rec["id"] == "" {
+		t.Fatalf("want a generated id even with a null body, got %v", rec)
+	}
+}
+
 func TestRestAPI_CreateThenGet(t *testing.T) {
 	baseURL := testserver.NewWithSchema(t, notesSchema)
 	token := restToken(t, baseURL, "create-get@example.com", []string{"records:read", "records:write"})

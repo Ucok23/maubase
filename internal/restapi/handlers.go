@@ -489,6 +489,17 @@ func decodeBody(w http.ResponseWriter, r *http.Request, col *Collection) (map[st
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return nil, false
 	}
+	if body == nil {
+		// A literal JSON `null` body decodes successfully but leaves body
+		// nil rather than empty (encoding/json's documented behavior for
+		// a map destination) — every caller of decodeBody goes on to
+		// write into this map (owner-stamping, PK generation), which
+		// panics on a nil map. Any other non-object top-level JSON value
+		// (an array, a string, a number) fails the Decode above already,
+		// since json.Unmarshal refuses to put those into a map — null is
+		// the one value that decodes into "no error, but also no map."
+		body = map[string]any{}
+	}
 	for k := range body {
 		if !col.HasColumn(k) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("unknown field %q", k)})
