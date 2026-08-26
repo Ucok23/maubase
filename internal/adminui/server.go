@@ -17,6 +17,7 @@ import (
 	"errors"
 	"html/template"
 	"io/fs"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,6 +29,7 @@ import (
 	"maubase/internal/auth"
 	"maubase/internal/oauth"
 	"maubase/internal/ownerauth"
+	"maubase/internal/ratelimit"
 	"maubase/internal/restapi"
 	"maubase/internal/storage"
 )
@@ -91,21 +93,68 @@ const (
 )
 
 type Server struct {
-	db        *sql.DB
-	auth      *auth.Service
-	ownerAuth *ownerauth.Service
-	restapi   *restapi.Server
-	storage   *storage.Server
-	oauth     *oauth.Server
-	audit     *audit.Log
+	db           *sql.DB
+	auth         *auth.Service
+	ownerAuth    *ownerauth.Service
+	restapi      *restapi.Server
+	storage      *storage.Server
+	oauth        *oauth.Server
+	audit        *audit.Log
+	loginLimiter *ratelimit.Limiter
 }
 
 // storageSvc and oauthSvc are only needed for the Users panel's force-delete
 // (handleDeleteUser), which reproduces internal/server's own
 // DELETE /api/auth/me cascade — application data, storage, OAuth grants,
 // then the identity record itself. See spec/admin-ui.md ADMINUI-28.
-func NewServer(db *sql.DB, authSvc *auth.Service, ownerAuthSvc *ownerauth.Service, restapiSvc *restapi.Server, storageSvc *storage.Server, oauthSvc *oauth.Server, auditLog *audit.Log) *Server {
-	return &Server{db: db, auth: authSvc, ownerAuth: ownerAuthSvc, restapi: restapiSvc, storage: storageSvc, oauth: oauthSvc, audit: auditLog}
+//
+// loginRateLimit/Window configure this admin UI's own POST /admin/ui/login
+// throttle — a separate ratelimit.Limiter instance from internal/server's,
+// since this Server is constructed independently of (and before)
+// internal/server.Server. Before this existed, the JSON API's
+// POST /admin/auth/login was throttled but this, the page a human admin
+// actually uses, was not — a complete bypass of MAUBASE_LOGIN_RATE_LIMIT
+// for the real login form. Zero (the same convention internal/server
+// uses) disables it.
+func NewServer(db *sql.DB, authSvc *auth.Service, ownerAuthSvc *ownerauth.Service, restapiSvc *restapi.Server, storageSvc *storage.Server, oauthSvc *oauth.Server, auditLog *audit.Log, loginRateLimit int, loginRateWindow time.Duration) *Server {
+	return &Server{
+		db: db, auth: authSvc, ownerAuth: ownerAuthSvc, restapi: restapiSvc, storage: storageSvc, oauth: oauthSvc, audit: auditLog,
+		loginLimiter: ratelimit.New(loginRateLimit, loginRateWindow),
+	}
+}
+
+// rateLimitLogin throttles POST /admin/ui/login per client IP, mirroring
+// internal/server's identical middleware for the JSON login endpoints —
+// see this package's NewServer doc for why this needs its own Limiter
+// instance rather than sharing that one.
+func (s *Server) rateLimitLogin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.loginLimiter.Limit <= 0 {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if ok, retryAfter := s.loginLimiter.Allow(clientIP(r)); !ok {
+			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())+1))
+			w.WriteHeader(http.StatusTooManyRequests)
+			render(w, "login", map[string]any{"Title": "Sign in", "Error": "too many login attempts — try again shortly"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// clientIP extracts the caller's address from r.RemoteAddr. Unlike
+// internal/server's version, this package doesn't register
+// middleware.RealIP itself — Mount attaches routes onto the same chi
+// router internal/server already configured with it, so
+// X-Forwarded-For/X-Real-IP are already normalized into RemoteAddr by
+// the time a request reaches here.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // Mount registers /admin/ui/* onto r.
@@ -118,7 +167,7 @@ func (s *Server) Mount(r chi.Router) {
 
 	r.Route("/admin/ui", func(r chi.Router) {
 		r.Get("/login", s.handleLoginPage)
-		r.Post("/login", s.handleLoginSubmit)
+		r.With(s.rateLimitLogin).Post("/login", s.handleLoginSubmit)
 		r.Post("/logout", s.handleLogout)
 
 		r.Group(func(r chi.Router) {

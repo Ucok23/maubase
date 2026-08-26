@@ -35,18 +35,28 @@ that admin as actor.
 
 ## Login rate-limiting
 
-`POST /api/auth/login` and `POST /admin/auth/login` each throttle repeated
-attempts from the same client IP, regardless of whether an individual
-attempt succeeds or fails — the point is bounding brute-force credential
-guessing, not just counting failures. Every deployment ships with a
-default limit; see the README for how to tune it.
+Every endpoint that submits a password against `auth.Service.Login` or
+`ownerauth.Service.Login` throttles repeated attempts from the same
+client IP, regardless of whether an individual attempt succeeds or
+fails — the point is bounding brute-force credential guessing, not just
+counting failures. That's `POST /api/auth/login`, `POST
+/admin/auth/login`, the login step embedded in `POST /oauth/authorize`
+(it calls the identical `auth.Service.Login` a plain login does — this
+was a complete bypass of the JSON endpoint's own throttle before it was
+covered here too), and `POST /admin/ui/login` (the human-facing admin
+page; it uses its own separate limiter instance from the JSON API's,
+since `internal/adminui.Server` is constructed independently — but the
+same per-IP-per-window shape). Every deployment ships with a default
+limit; see the README for how to tune it.
 
 ## MAINT-04: Excess login attempts are rejected
-Given a login endpoint (customer or owner plane) configured with a
-request limit over a window,
+Given a login endpoint (customer plane, owner plane, the admin UI's own
+login page, or the login form embedded in `/oauth/authorize`)
+configured with a request limit over a window,
 when a client sends more than that many `POST` requests to it within one
 window,
 then the requests within the limit get their normal response (`200` or
-`401`, whichever the credentials warrant), and requests beyond the limit
-get `429 Too Many Requests` with a `Retry-After` header, until the window
-resets.
+`401`, whichever the credentials warrant — or, for the HTML surfaces,
+the re-rendered login page with an error), and requests beyond the
+limit get `429 Too Many Requests` with a `Retry-After` header, until the
+window resets.

@@ -220,7 +220,7 @@ func newCustom(t *testing.T, opts Options) (string, error) {
 
 	auditLog := audit.New(sqlDB)
 
-	adminuiSvc := adminui.NewServer(sqlDB, authSvc, ownerSvc, restapiSvc, storageSvc, oauthSvc, auditLog)
+	adminuiSvc := adminui.NewServer(sqlDB, authSvc, ownerSvc, restapiSvc, storageSvc, oauthSvc, auditLog, opts.LoginRateLimit, opts.LoginRateWindow)
 
 	emailSender := opts.EmailSender
 	if emailSender == nil {

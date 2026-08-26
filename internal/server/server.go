@@ -99,7 +99,16 @@ func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.
 	// third-party apps (MCP clients included) against its API. See
 	// internal/oauth for the Fosite wiring.
 	r.Get("/oauth/authorize", s.oauth.HandleAuthorize)
-	r.Post("/oauth/authorize", s.oauth.HandleAuthorize)
+	// Rate-limited: this same route's embedded login form calls
+	// s.auth.Login exactly like POST /api/auth/login does, so without
+	// this it was a complete bypass of that endpoint's brute-force
+	// protection — register a throwaway client (unauthenticated,
+	// trivial) and guess passwords here instead. Shares loginLimiter's
+	// per-IP budget rather than a separate one, same reasoning as
+	// forgot-password below: a legitimate flow only ever POSTs here
+	// once for login and once for consent, well within any reasonable
+	// window.
+	r.With(s.rateLimitLogin).Post("/oauth/authorize", s.oauth.HandleAuthorize)
 	r.Post("/oauth/token", s.oauth.HandleToken)
 	r.Post("/oauth/revoke", s.oauth.HandleRevoke)
 	r.Post("/oauth/register", s.oauth.HandleRegister)
