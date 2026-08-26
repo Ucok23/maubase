@@ -90,7 +90,7 @@ func run() error {
 
 	auditLog := audit.New(sqlDB)
 
-	adminuiSvc := adminui.NewServer(sqlDB, authSvc, ownerSvc, restapiSvc, storageSvc, oauthSvc, auditLog)
+	adminuiSvc := adminui.NewServer(sqlDB, authSvc, ownerSvc, restapiSvc, storageSvc, oauthSvc, auditLog, cfg.LoginRateLimit, cfg.LoginRateWindow)
 
 	// Falls back to a sender that fails loudly rather than silently
 	// no-op'ing when Resend isn't configured — see email.NoopSender.

@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -174,5 +175,76 @@ func TestMaintenance_OwnerLoginRateLimitRejectsExcessAttempts(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("attempt beyond limit: want 429, got %d", resp.StatusCode)
+	}
+}
+
+// TestMaintenance_AdminUILoginRateLimitRejectsExcessAttempts: the human-
+// facing admin login page (POST /admin/ui/login) used to be a complete
+// bypass of MAUBASE_LOGIN_RATE_LIMIT — only its JSON twin,
+// POST /admin/auth/login (tested above), was ever throttled.
+func TestMaintenance_AdminUILoginRateLimitRejectsExcessAttempts(t *testing.T) {
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail:    bootstrapEmail,
+		BootstrapOwnerPassword: bootstrapPassword,
+		LoginRateLimit:         3,
+		LoginRateWindow:        time.Minute,
+	})
+
+	client := newClient(t)
+	for i := range 3 {
+		resp := adminUILogin(t, client, baseURL, bootstrapEmail, "wrong-password")
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("attempt %d: want 200 (re-rendered login form, within limit), got %d", i+1, resp.StatusCode)
+		}
+	}
+
+	resp := adminUILogin(t, client, baseURL, bootstrapEmail, "wrong-password")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("attempt beyond limit: want 429, got %d", resp.StatusCode)
+	}
+}
+
+// TestMaintenance_OAuthAuthorizeLoginRateLimitRejectsExcessAttempts: the
+// login form embedded in GET/POST /oauth/authorize calls the exact same
+// auth.Service.Login as POST /api/auth/login, but used to have none of
+// that endpoint's throttling — a complete bypass via registering a
+// throwaway (unauthenticated, trivial) OAuth client and guessing
+// passwords through the consent-flow login form instead.
+func TestMaintenance_OAuthAuthorizeLoginRateLimitRejectsExcessAttempts(t *testing.T) {
+	baseURL := testserver.NewCustom(t, testserver.Options{LoginRateLimit: 3, LoginRateWindow: time.Minute})
+	signUp(t, newClient(t), baseURL, "authorize-ratelimit@example.com", "correcthorse")
+
+	clientID := registerPublicClient(t, baseURL, testRedirectURI, "records:read")
+	_, challenge := pkcePair(t)
+	authorizeQuery := authorizeParams(clientID, testRedirectURI, "records:read", "somestate12345678", challenge)
+
+	client := newClient(t)
+	tryLogin := func() *http.Response {
+		form := url.Values{}
+		form.Set("step", "login")
+		form.Set("oauth_request", authorizeQuery.Encode())
+		form.Set("email", "authorize-ratelimit@example.com")
+		form.Set("password", "wrong-password")
+		resp, err := client.PostForm(baseURL+"/oauth/authorize", form)
+		if err != nil {
+			t.Fatalf("POST /oauth/authorize (login step): %v", err)
+		}
+		return resp
+	}
+
+	for i := range 3 {
+		resp := tryLogin()
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("attempt %d: want 200 (re-rendered login form, within limit), got %d", i+1, resp.StatusCode)
+		}
+	}
+
+	resp := tryLogin()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("attempt beyond limit: want 429, got %d: %s", resp.StatusCode, bodyString(t, resp))
 	}
 }
