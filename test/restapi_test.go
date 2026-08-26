@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"maubase/internal/testserver"
@@ -73,11 +74,55 @@ func TestRestAPI_InternalTablesNeverExposed(t *testing.T) {
 	token := restToken(t, baseURL, "internal-tables@example.com", []string{"records:read", "records:write"})
 
 	// REST-COL-01
-	for _, table := range []string{"users", "oauth_clients", "owner_users", "sessions"} {
+	for _, table := range []string{
+		"users", "oauth_clients", "owner_users", "sessions",
+		// password_reset_tokens and social_identities shipped exposed
+		// (see registry.go's reservedTables doc comment) — a real
+		// account-takeover vulnerability. Named explicitly here, in
+		// addition to TestRestAPI_NoAppSchemaExposesNothing below,
+		// because that incident is exactly the kind of thing worth a
+		// test a future reader can find by grepping the table name.
+		"password_reset_tokens", "social_identities",
+	} {
 		resp := doAuthed(t, http.MethodGet, baseURL+"/api/data/"+table, token, nil)
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("GET /api/data/%s: want 404, got %d: %s", table, resp.StatusCode, bodyString(t, resp))
 		}
+	}
+}
+
+// TestRestAPI_NoAppSchemaExposesNothing is REST-COL-01's structural
+// backstop: rather than checking a hand-maintained list of table names
+// (which is exactly what let password_reset_tokens/social_identities
+// ship exposed — see registry.go's reservedTables doc comment), this
+// stands up a server with maubase's own migrations only — no deployment
+// schema at all — and asserts the admin UI's data-browser landing page
+// (GET /admin/ui/data, backed by restapi.Server.AdminCollections, the
+// exact same registry auto-REST itself uses) shows its "no application
+// tables yet" empty state. Every table maubase's own migrations create
+// is necessarily one of its own internal tables — if Discover ever
+// finds one that isn't in reservedTables, this fails loudly the moment
+// a new migration ships (the empty state disappears, replaced by a
+// card naming the leaked table), instead of silently exposing it until
+// someone happens to write a by-name test for that specific table.
+func TestRestAPI_NoAppSchemaExposesNothing(t *testing.T) {
+	baseURL := testserver.NewWithOwner(t, "structural-check@example.com", "correcthorse")
+	client := newClient(t)
+	loginResp := ownerLogin(t, client, baseURL, "structural-check@example.com", "correcthorse")
+	if loginResp.StatusCode != http.StatusOK {
+		t.Fatalf("owner login: want 200, got %d: %s", loginResp.StatusCode, bodyString(t, loginResp))
+	}
+
+	resp, err := client.Get(baseURL + "/admin/ui/data")
+	if err != nil {
+		t.Fatalf("GET /admin/ui/data: %v", err)
+	}
+	body := bodyString(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /admin/ui/data: want 200, got %d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, "No application tables yet") {
+		t.Fatalf("want the empty state (no app schema means no exposed collections at all), got a non-empty collections list:\n%s", body)
 	}
 }
 
