@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -84,6 +85,20 @@ func (l *Log) Record(ctx context.Context, event string, actor Actor, target Targ
 		return fmt.Errorf("insert audit entry: %w", err)
 	}
 	return nil
+}
+
+// RecordLogged is Record for the common case: a caller for whom audit
+// logging is best-effort and shouldn't fail (or complicate) the request
+// it's attached to. It does NOT silently drop a failure the way every
+// caller of Record used to (`_ = s.audit.Record(...)`, contradicting
+// Record's own documented contract above) — a write failure is logged via
+// the standard log package instead, so it stays operator-visible. Prefer
+// Record directly wherever a caller has something more meaningful to do
+// with the error than log it (none do today, but the option stays open).
+func (l *Log) RecordLogged(ctx context.Context, event string, actor Actor, target Target, metadata map[string]any) {
+	if err := l.Record(ctx, event, actor, target, metadata); err != nil {
+		log.Printf("audit: record %s failed: %v", event, err)
+	}
 }
 
 // Entry is one row as returned by List.

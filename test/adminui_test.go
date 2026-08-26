@@ -1,8 +1,11 @@
 package e2e_test
 
 import (
+	"bytes"
+	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 
@@ -580,6 +583,46 @@ func TestAdminUI_SQLStudioAuditsEveryRun(t *testing.T) {
 	body := bodyString(t, resp)
 	if strings.Count(body, "sql_executed") < 2 {
 		t.Fatalf("want at least 2 sql_executed audit entries, got: %s", body)
+	}
+}
+
+// TestAdminUI_AuditWriteFailureIsLoggedNotSilentlyDropped: audit.Log.
+// RecordLogged (what every owner-plane handler now calls, instead of the
+// old `_ = s.audit.Record(...)` that silently discarded a write failure —
+// contradicting Record's own documented "never silently drops an entry"
+// contract) must (a) still let the request that triggered it succeed, and
+// (b) surface the failure somewhere an operator can see it, rather than
+// losing it entirely. Dropping the audit table itself via SQL Studio is
+// the most direct way to make every subsequent audit write fail.
+func TestAdminUI_AuditWriteFailureIsLoggedNotSilentlyDropped(t *testing.T) {
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	dropResp, err := owner.PostForm(baseURL+"/admin/ui/sql", url.Values{"query": {"DROP TABLE owner_audit_log"}})
+	if err != nil {
+		t.Fatalf("drop audit table: %v", err)
+	}
+	// The DROP itself is the very last statement that could still be
+	// audited (it ran before the table it's about to remove is gone) —
+	// not asserted either way here, just draining the response.
+	dropResp.Body.Close()
+
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	// Logout calls audit.RecordLogged(EventLogout, ...) — with the table
+	// gone, that write now fails.
+	logoutResp, err := owner.Post(baseURL+"/admin/ui/logout", "", nil)
+	if err != nil {
+		t.Fatalf("logout: %v", err)
+	}
+	if logoutResp.StatusCode != http.StatusSeeOther && logoutResp.StatusCode != http.StatusOK {
+		t.Fatalf("logout after audit table was dropped: want success despite the audit write failing, got %d: %s", logoutResp.StatusCode, bodyString(t, logoutResp))
+	}
+	if !strings.Contains(logBuf.String(), "audit: record") {
+		t.Fatalf("want the failed audit write logged (not silently dropped), got log output: %q", logBuf.String())
 	}
 }
 

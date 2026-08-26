@@ -33,14 +33,14 @@ func (s *Server) handleOwnerLogin(w http.ResponseWriter, r *http.Request) {
 		// req.Email is recorded as-is: it's exactly what was attempted,
 		// whether or not it corresponds to a real account, which is the
 		// point of a failed-login audit entry.
-		_ = s.audit.Record(r.Context(), audit.EventLoginFailed, audit.Actor{}, audit.Target{Email: req.Email}, nil)
+		s.audit.RecordLogged(r.Context(), audit.EventLoginFailed, audit.Actor{}, audit.Target{Email: req.Email}, nil)
 		writeOwnerAuthError(w, err)
 		return
 	}
 	// req.Email matches the account's stored email exactly (Login looked
 	// it up by that value), so it's safe to use directly here without a
 	// separate lookup.
-	_ = s.audit.Record(r.Context(), audit.EventLogin, audit.Actor{ID: session.OwnerID, Email: req.Email}, audit.Target{}, nil)
+	s.audit.RecordLogged(r.Context(), audit.EventLogin, audit.Actor{ID: session.OwnerID, Email: req.Email}, audit.Target{}, nil)
 	ownerauth.SetCookie(w, session)
 	writeJSON(w, http.StatusOK, map[string]any{"expires_at": session.ExpiresAt})
 }
@@ -51,7 +51,7 @@ func (s *Server) handleOwnerLogout(w http.ResponseWriter, r *http.Request) {
 		// an owner identity to attribute the audit entry to. A missing or
 		// already-invalid cookie logs nothing — there's no one to name.
 		if owner, err := s.ownerAuth.ValidateSession(r.Context(), c.Value); err == nil {
-			_ = s.audit.Record(r.Context(), audit.EventLogout, audit.Actor{ID: owner.ID, Email: owner.Email}, audit.Target{}, nil)
+			s.audit.RecordLogged(r.Context(), audit.EventLogout, audit.Actor{ID: owner.ID, Email: owner.Email}, audit.Target{}, nil)
 		}
 		_ = s.ownerAuth.Logout(r.Context(), c.Value)
 	}
@@ -92,7 +92,7 @@ func (s *Server) handleCreateOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor := ownerFromContext(r.Context())
-	_ = s.audit.Record(r.Context(), audit.EventOwnerCreate,
+	s.audit.RecordLogged(r.Context(), audit.EventOwnerCreate,
 		audit.Actor{ID: actor.ID, Email: actor.Email},
 		audit.Target{ID: owner.ID, Email: owner.Email},
 		map[string]any{"role": string(owner.Role)},
@@ -108,7 +108,7 @@ func (s *Server) handleDeleteOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor := ownerFromContext(r.Context())
-	_ = s.audit.Record(r.Context(), audit.EventOwnerDelete,
+	s.audit.RecordLogged(r.Context(), audit.EventOwnerDelete,
 		audit.Actor{ID: actor.ID, Email: actor.Email},
 		audit.Target{ID: deleted.ID, Email: deleted.Email},
 		map[string]any{"role": string(deleted.Role)},

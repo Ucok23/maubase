@@ -31,7 +31,7 @@ func (s *Server) handlePurgeSessions(w http.ResponseWriter, r *http.Request) {
 	if owner != nil {
 		actor = audit.Actor{ID: owner.ID, Email: owner.Email}
 	}
-	_ = s.audit.Record(r.Context(), audit.EventSessionsPurged, actor, audit.Target{}, map[string]any{
+	s.audit.RecordLogged(r.Context(), audit.EventSessionsPurged, actor, audit.Target{}, map[string]any{
 		"sessions":       sessionsPurged,
 		"owner_sessions": ownerSessionsPurged,
 	})
