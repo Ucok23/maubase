@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -83,7 +84,8 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 
 	rawToken, _, ok, err := s.auth.CreateResetToken(r.Context(), req.Email)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		log.Printf("forgot-password: create reset token: %v", err)
+		w.WriteHeader(http.StatusNoContent) // see the two error cases below for why this stays 204
 		return
 	}
 	if ok {
@@ -92,9 +94,17 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 			`<p>Someone requested a password reset for this account.</p><p><a href="%s">Reset your password</a></p><p>This link expires in one hour. If you didn't request this, you can ignore this email.</p>`,
 			link,
 		)
+		// A send failure — including the unconfigured-deployment default,
+		// email.NoopSender, which always errors by design — must not
+		// change the response: PWRESET-02 requires 204 regardless of
+		// whether the account exists, and this response happens after
+		// CreateResetToken already told us it does. Surfacing the error
+		// here (as this used to) turned "no email configured yet" into
+		// an account-enumeration oracle on every fresh deployment: a real
+		// account got 500, a fake one got 204. Logged instead, so an
+		// operator still finds out delivery isn't working.
 		if err := s.email.Send(r.Context(), req.Email, "Reset your password", html); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to send reset email"})
-			return
+			log.Printf("forgot-password: send reset email to %s: %v", req.Email, err)
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -108,9 +118,22 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if err := s.auth.ResetPassword(r.Context(), req.Token, req.Password); err != nil {
+	userID, err := s.auth.ResetPassword(r.Context(), req.Token, req.Password)
+	if err != nil {
 		writeAuthError(w, err)
 		return
+	}
+	// Sessions are already revoked (inside ResetPassword's own
+	// transaction); an OAuth access/refresh token issued to a third-
+	// party client while one of those sessions was active is a separate
+	// grant this same "sign out everywhere" moment must also cover — see
+	// spec/password-reset.md PWRESET-09. The password change already
+	// committed by this point, so a failure here is logged rather than
+	// turned into an error response: telling the caller their reset
+	// failed, when it didn't, would be worse, and the token they'd retry
+	// with is already spent (single-use) regardless.
+	if err := s.oauth.RevokeAllForSubject(r.Context(), userID); err != nil {
+		log.Printf("reset-password: revoke oauth grants for %s: %v", userID, err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

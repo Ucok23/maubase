@@ -309,8 +309,10 @@ reset link built from `MAUBASE_PASSWORD_RESET_URL` (your own frontend's
 page, not something maubase renders) with a one-hour, single-use token
 appended as `?token=`. `POST /api/auth/reset-password`
 (`{"token": "...", "password": "..."}`) redeems it: sets the new
-password and signs the account out everywhere, including whatever
-session requested the reset. Delivery is via `internal/email.Sender` —
+password and signs the account out everywhere — every session, plus
+every OAuth access/refresh token issued to a third-party client while
+one of those sessions was active — including whatever session requested
+the reset. Delivery is via `internal/email.Sender` —
 Resend (`internal/email.ResendSender`) when both `MAUBASE_RESEND_API_KEY`
 and `MAUBASE_EMAIL_FROM` are set. See `spec/password-reset.md`.
 
