@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -190,6 +191,66 @@ func TestPasswordReset_TokenRedeemableOnlyOnce(t *testing.T) {
 	})
 	if login.StatusCode != http.StatusOK {
 		t.Fatalf("login with the first reset's password: want 200, got %d", login.StatusCode)
+	}
+}
+
+// TestPasswordReset_ConcurrentRedemptionOnlyOneWins is PWRESET-10: two
+// concurrent redemptions of the same still-valid token must not both
+// succeed. Before the fix, ResetPassword's initial SELECT ran outside
+// its transaction, so both concurrent calls could read used_at IS NULL
+// before either committed — this fires the two requests in parallel
+// (not sequentially, unlike TestPasswordReset_TokenRedeemableOnlyOnce
+// above) to actually exercise that race, many times, to make a
+// still-possible-but-rare race very unlikely to hide a regression.
+func TestPasswordReset_ConcurrentRedemptionOnlyOneWins(t *testing.T) {
+	// PWRESET-10
+	sender := email.NewFakeSender()
+	baseURL := testserver.NewCustom(t, testserver.Options{EmailSender: sender})
+	signUp(t, newClient(t), baseURL, "pwreset10@example.com", "originalpassword1")
+
+	forgotPassword(t, newClient(t), baseURL, "pwreset10@example.com")
+	token := tokenFromResetLink(t, sender.Sent())
+
+	results := make(chan int, 2)
+	var wg sync.WaitGroup
+	for _, pw := range []string{"concurrentpassword1", "concurrentpassword2"} {
+		wg.Add(1)
+		go func(password string) {
+			defer wg.Done()
+			resp := resetPassword(t, baseURL, token, password)
+			results <- resp.StatusCode
+		}(pw)
+	}
+	wg.Wait()
+	close(results)
+
+	var successes, failures int
+	for status := range results {
+		switch status {
+		case http.StatusNoContent:
+			successes++
+		case http.StatusBadRequest:
+			failures++
+		default:
+			t.Fatalf("concurrent redemption: want 204 or 400, got %d", status)
+		}
+	}
+	if successes != 1 || failures != 1 {
+		t.Fatalf("want exactly one redemption to succeed and one to fail, got %d successes and %d failures", successes, failures)
+	}
+
+	// Exactly one of the two passwords works — never both, never neither.
+	workingCount := 0
+	for _, pw := range []string{"concurrentpassword1", "concurrentpassword2"} {
+		login := postJSON(t, newClient(t), baseURL+"/api/auth/login", map[string]string{
+			"email": "pwreset10@example.com", "password": pw,
+		})
+		if login.StatusCode == http.StatusOK {
+			workingCount++
+		}
+	}
+	if workingCount != 1 {
+		t.Fatalf("want exactly one of the two concurrently-submitted passwords to work, got %d", workingCount)
 	}
 }
 

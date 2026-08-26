@@ -80,6 +80,16 @@ func decodeJSONMap(t *testing.T, resp *http.Response) map[string]any {
 	return out
 }
 
+func decodeJSONList(t *testing.T, resp *http.Response) []map[string]any {
+	t.Helper()
+	defer resp.Body.Close()
+	var out []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode json: %v", err)
+	}
+	return out
+}
+
 // pkcePair returns a PKCE code_verifier and its S256 code_challenge, as a
 // client starting an authorization code flow would generate.
 func pkcePair(t *testing.T) (verifier, challenge string) {

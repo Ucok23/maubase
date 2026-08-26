@@ -273,10 +273,29 @@ func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword strin
 	}
 	tokenHash := hashToken(rawToken)
 
+	hash, err := hashPassword(newPassword)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeds
+
+	// The lookup-then-check-then-write sequence below has to happen
+	// inside this transaction, not before it: internal/db.Open pins
+	// SetMaxOpenConns(1), so BeginTx already holds the connection
+	// exclusively until Commit/Rollback — reading the token's
+	// used_at/expires_at here (rather than in a standalone query before
+	// BeginTx, as this used to) is what actually closes the race where
+	// two concurrent redemptions of the same token both pass the check
+	// before either commits its write. See PWRESET-05, PWRESET-10.
 	var id, userID string
 	var expiresAt time.Time
 	var usedAt sql.NullTime
-	err := s.db.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		SELECT id, user_id, expires_at, used_at FROM password_reset_tokens WHERE token_hash = ?
 	`, tokenHash).Scan(&id, &userID, &expiresAt, &usedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -288,17 +307,6 @@ func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword strin
 	if usedAt.Valid || time.Now().After(expiresAt) {
 		return ErrResetTokenInvalid
 	}
-
-	hash, err := hashPassword(newPassword)
-	if err != nil {
-		return fmt.Errorf("hash password: %w", err)
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeds
 
 	if _, err := tx.ExecContext(ctx, `UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, hash, userID); err != nil {
 		return fmt.Errorf("update password: %w", err)

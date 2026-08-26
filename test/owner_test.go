@@ -3,6 +3,7 @@ package e2e_test
 import (
 	"encoding/json"
 	"net/http"
+	"sync"
 	"testing"
 
 	"maubase/internal/testserver"
@@ -202,6 +203,110 @@ func TestOwner_LastOwnerCannotBeDeleted(t *testing.T) {
 	}
 	if resp2.StatusCode != http.StatusNoContent {
 		t.Fatalf("want 204 deleting an owner when a second owner remains, got %d: %s", resp2.StatusCode, bodyString(t, resp2))
+	}
+}
+
+// TestOwner_ConcurrentDeleteOfBothOwnersLeavesOneStanding is OWNR-18:
+// given exactly two owner-role accounts, concurrent deletes of BOTH must
+// not both succeed — a deployment must always retain at least one owner.
+// Before the fix, DeleteOwner's owner-count check and its DELETE ran as
+// two separate, unguarded queries, so two concurrent calls could each
+// observe ownerCount == 2, both pass the "> 1" guard, and both proceed —
+// zero owners, an unrecoverable deployment. Fires both deletes in
+// parallel (not sequentially, unlike TestOwner_LastOwnerCannotBeDeleted
+// above) to actually exercise that race.
+func TestOwner_ConcurrentDeleteOfBothOwnersLeavesOneStanding(t *testing.T) {
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	founder := newClient(t)
+	ownerLogin(t, founder, baseURL, bootstrapEmail, bootstrapPassword)
+
+	me := decodeJSONMap(t, mustGet(t, founder, baseURL+"/admin/auth/me"))
+	firstID, _ := me["id"].(string)
+	if firstID == "" {
+		t.Fatalf("setup: couldn't get own id: %v", me)
+	}
+
+	const secondEmail, secondPassword = "coowner-race@example.com", "correcthorse"
+	secondResp := createOwner(t, founder, baseURL, secondEmail, secondPassword, "owner")
+	if secondResp.StatusCode != http.StatusCreated {
+		t.Fatalf("setup: creating a second owner failed: %d", secondResp.StatusCode)
+	}
+	secondID, _ := decodeJSONMap(t, secondResp)["id"].(string)
+	if secondID == "" {
+		t.Fatalf("setup: couldn't get second owner's id")
+	}
+
+	// Each owner deletes ITSELF using its OWN session — not each other,
+	// and not both via one shared session. Cross-deleting (or reusing
+	// one session for both calls) would confound the test: deleting an
+	// owner cascades to that owner's own sessions, so whichever request
+	// commits first would invalidate the session authenticating the
+	// OTHER still-in-flight request, turning it into an unrelated 401
+	// rather than the 409 this test actually wants to observe. A
+	// self-delete's own authentication can never be invalidated by the
+	// OTHER request, since the other request only ever touches the
+	// other account.
+	secondClient := newClient(t)
+	if resp := ownerLogin(t, secondClient, baseURL, secondEmail, secondPassword); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup: second owner login failed: %d", resp.StatusCode)
+	}
+
+	type result struct {
+		ownerID string
+		client  *http.Client
+		status  int
+	}
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	for _, pair := range []struct {
+		id     string
+		client *http.Client
+	}{{firstID, founder}, {secondID, secondClient}} {
+		wg.Add(1)
+		go func(ownerID string, client *http.Client) {
+			defer wg.Done()
+			req, _ := http.NewRequest(http.MethodDelete, baseURL+"/admin/owners/"+ownerID, nil)
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Errorf("DELETE /admin/owners/%s: %v", ownerID, err)
+				return
+			}
+			results <- result{ownerID: ownerID, client: client, status: resp.StatusCode}
+		}(pair.id, pair.client)
+	}
+	wg.Wait()
+	close(results)
+
+	var successes, conflicts int
+	var survivor *http.Client
+	for r := range results {
+		switch r.status {
+		case http.StatusNoContent:
+			successes++
+		case http.StatusConflict:
+			conflicts++
+			survivor = r.client // rejected as "last owner" — this one is still here
+		default:
+			t.Fatalf("concurrent self-delete of %s: want 204 or 409, got %d", r.ownerID, r.status)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("want exactly one self-delete to succeed and one to be rejected as the last owner, got %d successes and %d conflicts", successes, conflicts)
+	}
+
+	// Verified via the survivor's own still-valid session — if the race
+	// had actually gone the buggy way (both succeeding), there would be
+	// no valid owner session left at all to check this with, which is
+	// itself exactly the failure this test exists to catch.
+	remaining := decodeJSONList(t, mustGet(t, survivor, baseURL+"/admin/owners"))
+	ownerCount := 0
+	for _, o := range remaining {
+		if role, _ := o["role"].(string); role == "owner" {
+			ownerCount++
+		}
+	}
+	if ownerCount != 1 {
+		t.Fatalf("want exactly one owner-role account left standing, got %d", ownerCount)
 	}
 }
 

@@ -187,13 +187,34 @@ func (s *Service) ListOwners(ctx context.Context) ([]*Owner, error) {
 // deletion, so a caller (e.g. an audit log entry) can still name who was
 // removed after the fact.
 func (s *Service) DeleteOwner(ctx context.Context, id string) (*Owner, error) {
-	target, err := s.GetOwner(ctx, id)
+	// The lookup, the last-owner count, and the delete all have to run
+	// inside one transaction: internal/db.Open pins SetMaxOpenConns(1),
+	// so BeginTx already holds the connection exclusively until
+	// Commit/Rollback — that exclusivity is what actually closes the
+	// race where two concurrent deletes of two different owner accounts
+	// (out of exactly two remaining) each observe ownerCount == 2, both
+	// pass the "> 1" guard, and both proceed, leaving zero owners. The
+	// previous version ran the count as a separate, standalone query
+	// before a separate standalone DELETE, with no such exclusivity.
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("begin tx: %w", err)
 	}
+	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeds
+
+	var target Owner
+	var role string
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, email, role, created_at, updated_at FROM owner_users WHERE id = ?
+	`, id).Scan(&target.ID, &target.Email, &role, &target.CreatedAt, &target.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("lookup owner: %w", err)
+	}
+	target.Role = Role(role)
+
 	if target.Role == RoleOwner {
 		var ownerCount int
-		if err := s.db.QueryRowContext(ctx, `
+		if err := tx.QueryRowContext(ctx, `
 			SELECT COUNT(*) FROM owner_users WHERE role = ?
 		`, string(RoleOwner)).Scan(&ownerCount); err != nil {
 			return nil, fmt.Errorf("count owners: %w", err)
@@ -202,11 +223,13 @@ func (s *Service) DeleteOwner(ctx context.Context, id string) (*Owner, error) {
 			return nil, ErrLastOwner
 		}
 	}
-	_, err = s.db.ExecContext(ctx, `DELETE FROM owner_users WHERE id = ?`, id)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM owner_users WHERE id = ?`, id); err != nil {
 		return nil, fmt.Errorf("delete owner: %w", err)
 	}
-	return target, nil
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return &target, nil
 }
 
 func (s *Service) createSession(ctx context.Context, ownerID string) (*Session, error) {
