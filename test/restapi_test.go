@@ -161,6 +161,40 @@ func TestRestAPI_CreateWithNullBodyDoesNotPanic(t *testing.T) {
 	}
 }
 
+// TestRestAPI_OversizedBodyRejected (REST-VALIDATION-03) uses a small,
+// explicit MaxRequestBodyBytes rather than the real ~1MB default, so the
+// test doesn't need to actually push megabytes over the wire to exercise
+// the limit.
+func TestRestAPI_OversizedBodyRejected(t *testing.T) {
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		Schema:              []string{notesSchema},
+		MaxRequestBodyBytes: 200,
+	})
+	token := restToken(t, baseURL, "oversized-body@example.com", []string{"records:read", "records:write"})
+
+	oversized := map[string]any{"title": "x", "body": strings.Repeat("a", 1000)}
+	resp := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", token, oversized)
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("want 413 for an oversized body, got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+
+	// A body under the limit still works, proving 413 was about size, not
+	// some other misconfiguration.
+	listResp := doAuthed(t, http.MethodGet, baseURL+"/api/data/notes", token, nil)
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 listing (should be empty, no row created), got %d", listResp.StatusCode)
+	}
+	list := decodeJSONMap(t, listResp)
+	if records, _ := list["records"].([]any); len(records) != 0 {
+		t.Fatalf("want no row created by the rejected oversized request, got %v", records)
+	}
+
+	normal := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", token, map[string]any{"title": "small", "body": "x"})
+	if normal.StatusCode != http.StatusCreated {
+		t.Fatalf("want a normal-sized body to still succeed, got %d: %s", normal.StatusCode, bodyString(t, normal))
+	}
+}
+
 func TestRestAPI_CreateThenGet(t *testing.T) {
 	baseURL := testserver.NewWithSchema(t, notesSchema)
 	token := restToken(t, baseURL, "create-get@example.com", []string{"records:read", "records:write"})

@@ -40,10 +40,16 @@ type Server struct {
 	// (or hasn't built internal/realtime in yet) can pass nil, and
 	// publish becomes a no-op. See spec/realtime.md.
 	broker *realtime.Broker
+	// maxBodyBytes caps a single create/update request body's size,
+	// matching internal/storage.Server's maxUploadBytes: a larger body is
+	// rejected before it's fully read into memory, rather than letting
+	// any authenticated records:write caller force the server to buffer
+	// an arbitrarily large JSON payload. See decodeBody.
+	maxBodyBytes int64
 }
 
-func NewServer(db *sql.DB, registry *Registry, oauthSvc *oauth.Server, broker *realtime.Broker) *Server {
-	s := &Server{db: db, oauth: oauthSvc, broker: broker}
+func NewServer(db *sql.DB, registry *Registry, oauthSvc *oauth.Server, broker *realtime.Broker, maxBodyBytes int64) *Server {
+	s := &Server{db: db, oauth: oauthSvc, broker: broker, maxBodyBytes: maxBodyBytes}
 	s.registry.Store(registry)
 	return s
 }
@@ -167,7 +173,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeOp(w, col.CreateRule) {
 		return
 	}
-	body, ok := decodeBody(w, r, col)
+	body, ok := s.decodeBody(w, r, col)
 	if !ok {
 		return
 	}
@@ -244,7 +250,7 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeOp(w, col.UpdateRule) {
 		return
 	}
-	body, ok := decodeBody(w, r, col)
+	body, ok := s.decodeBody(w, r, col)
 	if !ok {
 		return
 	}
@@ -481,11 +487,20 @@ func (s *Server) fetchByPK(ctx context.Context, col *Collection, pkValue any, sc
 
 // decodeBody parses the request body as a JSON object and rejects any key
 // that isn't a real column on the collection — a typo'd field fails loudly
-// instead of silently doing nothing.
-func decodeBody(w http.ResponseWriter, r *http.Request, col *Collection) (map[string]any, bool) {
+// instead of silently doing nothing. The body is capped at s.maxBodyBytes
+// (via http.MaxBytesReader) before anything reads it, so an oversized
+// payload is rejected — 413, not the generic 400 a truncated/invalid JSON
+// body gets — without being fully buffered into memory first.
+func (s *Server) decodeBody(w http.ResponseWriter, r *http.Request, col *Collection) (map[string]any, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxBodyBytes)
 	defer r.Body.Close()
 	var body map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body too large"})
+			return nil, false
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return nil, false
 	}

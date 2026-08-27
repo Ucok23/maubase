@@ -78,7 +78,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("discover rest collections: %w", err)
 	}
-	restapiSvc := restapi.NewServer(sqlDB, registry, oauthSvc, broker)
+	restapiSvc := restapi.NewServer(sqlDB, registry, oauthSvc, broker, cfg.MaxRequestBodyBytes)
 
 	storageBackend, err := storage.NewLocalBackend(cfg.StorageDir)
 	if err != nil {
