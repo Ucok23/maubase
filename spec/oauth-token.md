@@ -46,3 +46,13 @@ stops working, and the fresh `refresh_token` stops working too. Since the
 authorization server can't tell whether the original client or an
 attacker who stole the old token is the one calling, revoking everything
 downstream of the reused token is the only safe response.
+
+## TOK-08: Two concurrent redemptions of the same refresh token only ever mint one token pair
+Given one valid, unused `refresh_token`,
+when two `POST /oauth/token` (`grant_type=refresh_token`) requests
+carrying the identical token arrive concurrently,
+then exactly one succeeds with a fresh `access_token`/`refresh_token`
+pair, and the other is rejected — never both. A retry-after-slow-response
+from a real OAuth client is a normal occurrence, not an attack, but it
+must not be able to mint two independent, simultaneously-live token pairs
+from what "rotated on use" (TOK-05) promises is a single-use token.

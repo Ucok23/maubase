@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"net/http"
+	"sync"
 	"testing"
 
 	"maubase/internal/testserver"
@@ -209,5 +210,66 @@ func TestOAuthToken_RefreshTokenReuseRevokesWholeChain(t *testing.T) {
 	}
 	if secondRotate.StatusCode == http.StatusOK {
 		t.Fatalf("want the fresh refresh token revoked by reuse detection too, got 200: %v", decodeJSONMap(t, secondRotate))
+	}
+}
+
+func TestOAuthToken_ConcurrentRefreshRedemptionOnlyOneWins(t *testing.T) {
+	// TOK-08
+	baseURL := testserver.New(t)
+	clientID := registerPublicClient(t, baseURL, testRedirectURI, "profile offline_access")
+
+	client := newClient(t)
+	signUp(t, client, baseURL, "tok08@example.com", "correcthorse")
+	tok := authorizeAndGetToken(t, client, baseURL, clientID, testRedirectURI, []string{"profile", "offline_access"})
+	refreshToken, _ := tok["refresh_token"].(string)
+	if refreshToken == "" {
+		t.Fatalf("setup: want a refresh_token, got %v", tok)
+	}
+
+	form := map[string][]string{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refreshToken},
+		"client_id":     {clientID},
+	}
+
+	var wg sync.WaitGroup
+	statuses := make([]int, 2)
+	bodies := make([]map[string]any, 2)
+	for i := range statuses {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			resp, err := http.PostForm(baseURL+"/oauth/token", form)
+			if err != nil {
+				t.Errorf("POST /oauth/token (concurrent refresh #%d): %v", i, err)
+				return
+			}
+			statuses[i] = resp.StatusCode
+			bodies[i] = decodeJSONMap(t, resp)
+		}(i)
+	}
+	wg.Wait()
+
+	successes, accessTokens := 0, map[string]bool{}
+	for i, status := range statuses {
+		if status == http.StatusOK {
+			successes++
+			at, _ := bodies[i]["access_token"].(string)
+			accessTokens[at] = true
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("want exactly 1 of 2 concurrent redemptions to succeed, got %d: statuses=%v bodies=%v", successes, statuses, bodies)
+	}
+
+	// The one access_token that was minted must actually work — proving
+	// this isn't a case where both failed to register as a win.
+	var liveToken string
+	for at := range accessTokens {
+		liveToken = at
+	}
+	check := mustAuthedGet(t, baseURL+"/api/oauth/whoami", liveToken)
+	if check.StatusCode != http.StatusOK {
+		t.Fatalf("want the single winning access_token to work, got %d", check.StatusCode)
 	}
 }
