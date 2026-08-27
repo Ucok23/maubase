@@ -78,3 +78,28 @@ even for a signed-in user who would otherwise sail through consent —
 scope self-declaration at registration time would be theater if any
 registered client could silently request any scope in the server's
 global vocabulary regardless of what it declared.
+
+## AUTHZ-11: A user can review and revoke a client's standing grant
+Given a user who previously consented to a client for `profile` and
+`records:read`,
+when that same client later requests `records:write` too (a scope not
+previously granted),
+then the consent screen shows both the newly requested scope and the
+previously granted ones, distinctly — the previously granted scopes
+aren't silently omitted the way they were before, since a user can't
+make an informed decision about a scope they're never shown.
+Given the user unchecks `profile` on that screen (intending to revoke
+it) while still approving the new request,
+then the resulting persisted consent contains `records:read` and
+`records:write`, but not `profile` — a later authorize request asking
+for `profile` alone shows the consent screen again rather than silently
+re-granting it, since it's no longer part of what's on file.
+
+Separately, `GET /api/auth/me/consents` lists every client the caller
+has a standing consent for and its granted scopes, and
+`DELETE /api/auth/me/consents/{client_id}` revokes one specific client's
+access outright: deletes the standing consent record and immediately
+revokes every outstanding access/refresh token already issued to that
+client on the caller's behalf, without touching the account, its data,
+or any grant to a *different* client. Before this, the only way to undo
+a scope grant at all was deleting the entire account.

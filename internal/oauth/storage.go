@@ -276,6 +276,24 @@ func (s *Storage) RevokeForSubject(ctx context.Context, subject string) error {
 	return nil
 }
 
+// RevokeForSubjectAndClient is RevokeForSubject narrowed to grants issued
+// to one specific client — the storage side of a user revoking "this app"
+// specifically, rather than every third-party grant they've ever made
+// (which is all RevokeForSubject alone can express). client_id is a real
+// column on every oauthGrantTables table, unlike subject, so this needs
+// no extra JOIN beyond the same JSON1 match RevokeForSubject already uses.
+func (s *Storage) RevokeForSubjectAndClient(ctx context.Context, subject, clientID string) error {
+	for _, table := range oauthGrantTables {
+		_, err := s.db.ExecContext(ctx, fmt.Sprintf(
+			`DELETE FROM %s WHERE json_extract(session, '$.Subject') = ? AND client_id = ?`, table,
+		), subject, clientID)
+		if err != nil {
+			return fmt.Errorf("revoke %s for subject/client: %w", table, err)
+		}
+	}
+	return nil
+}
+
 // --- shared marshal/unmarshal helpers -------------------------------------
 
 // storedRequest is the JSON-serializable subset of fosite.Requester. The

@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
+
 	"maubase/internal/auth"
 )
 
@@ -218,6 +220,43 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clearSessionCookie(w)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleListConsents answers "what have I authorized?": every third-party
+// client the caller has a standing OAuth scope grant for, and exactly
+// what scopes. See spec/oauth-authorize-and-consent.md AUTHZ-11.
+func (s *Server) handleListConsents(w http.ResponseWriter, r *http.Request) {
+	user, ok := r.Context().Value(ctxKeyUser).(*auth.User)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	consents, err := s.oauth.ListConsents(r.Context(), user.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"consents": consents})
+}
+
+// handleRevokeConsent is the actual "undo" for a single client's access:
+// deletes the standing consent record and revokes every outstanding
+// token already issued to that client on the caller's behalf. Unlike
+// handleDeleteAccount, this doesn't touch anything else — the account,
+// its data, and its grants to every *other* client are untouched. See
+// spec/oauth-authorize-and-consent.md AUTHZ-11.
+func (s *Server) handleRevokeConsent(w http.ResponseWriter, r *http.Request) {
+	user, ok := r.Context().Value(ctxKeyUser).(*auth.User)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	clientID := chi.URLParam(r, "client_id")
+	if err := s.oauth.RevokeConsent(r.Context(), user.ID, clientID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
