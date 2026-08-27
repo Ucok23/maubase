@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"maubase/internal/social"
 	"maubase/internal/testserver"
@@ -218,6 +219,27 @@ func TestSocialLogin_GitHubFallsBackToPrimaryVerifiedEmail(t *testing.T) {
 	}
 	if email := meEmail(t, client, baseURL); email != "primary-verified@example.com" {
 		t.Fatalf("want the account created with GitHub's primary verified email, got %q", email)
+	}
+}
+
+func TestSocialLogin_StartIsRateLimited(t *testing.T) {
+	// SOCIAL-07
+	provider := fakeGoogleProvider(t, "google-uid-ratelimit", "social07@example.com")
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		SocialProviders: map[string]social.Provider{"google": provider},
+		LoginRateLimit:  2, LoginRateWindow: 60 * time.Second,
+	})
+	client := newClient(t)
+
+	for i := 0; i < 2; i++ {
+		resp := doGetNoRedirect(t, client, baseURL+"/api/auth/social/google")
+		if resp.StatusCode != http.StatusSeeOther {
+			t.Fatalf("attempt %d: want 303 (redirect to provider), got %d", i+1, resp.StatusCode)
+		}
+	}
+	resp := doGetNoRedirect(t, client, baseURL+"/api/auth/social/google")
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("attempt over the limit: want 429, got %d", resp.StatusCode)
 	}
 }
 

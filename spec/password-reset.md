@@ -115,3 +115,10 @@ then exactly one succeeds (`204`) and the other is rejected (`400`) —
 the single-use guarantee PWRESET-05 states must hold even when two
 requests race for the same token, not just when a second one arrives
 after the first has already committed.
+
+## PWRESET-11: Reset-password is rate-limited too
+`POST /api/auth/reset-password` shares the same per-IP throttle `POST
+/api/auth/login` and `POST /api/auth/forgot-password` do — even though
+the 256-bit token makes brute force impractical regardless, every
+"submit a secret" endpoint in this flow is throttled consistently
+rather than leaving one exception a future change could quietly widen.
