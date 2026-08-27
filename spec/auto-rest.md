@@ -85,3 +85,10 @@ being silently dropped.
 When an update body includes the primary key column,
 then it's ignored — the row's id is exactly what it was before the
 request, regardless of what value was sent.
+
+## REST-VALIDATION-03: An oversized request body is rejected before being fully read
+When a create or update request body exceeds the server's configured
+size limit (`MAUBASE_MAX_REQUEST_BODY_KB`),
+then the response is `413`, and the body is never fully buffered/decoded
+into memory first — an authenticated `records:write` caller can't force
+unbounded memory use by sending an arbitrarily large payload.

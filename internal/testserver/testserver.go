@@ -56,6 +56,11 @@ type Options struct {
 	// config.Load".
 	MaxUploadBytes int64
 
+	// MaxRequestBodyBytes caps a single /api/data/* create/update request
+	// body (see internal/restapi). Zero means "use the same 1MB default
+	// as config.Load".
+	MaxRequestBodyBytes int64
+
 	// EmailSender backs POST /api/auth/forgot-password. Nil defaults to
 	// a fresh email.NewFakeSender() — a test that wants to inspect what
 	// was "sent" (the reset link, notably) should construct its own
@@ -204,7 +209,11 @@ func newCustom(t *testing.T, opts Options) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	restapiSvc := restapi.NewServer(sqlDB, registry, oauthSvc, broker)
+	maxRequestBodyBytes := opts.MaxRequestBodyBytes
+	if maxRequestBodyBytes == 0 {
+		maxRequestBodyBytes = 1024 << 10 // 1MB, matching config's default
+	}
+	restapiSvc := restapi.NewServer(sqlDB, registry, oauthSvc, broker, maxRequestBodyBytes)
 
 	storageBackend, err := storage.NewLocalBackend(filepath.Join(t.TempDir(), "storage"))
 	if err != nil {

@@ -269,6 +269,9 @@ Config via env vars (see `internal/config`):
   are written, one file per upload
 - `MAUBASE_MAX_UPLOAD_MB` (default `25`) — largest single file upload
   accepted; a bigger request body is rejected before it's fully read
+- `MAUBASE_MAX_REQUEST_BODY_KB` (default `1024`) — largest `/api/data/*`
+  create/update request body accepted (`413` past this); same
+  reject-before-fully-reading behavior as uploads
 - `MAUBASE_RESEND_API_KEY` / `MAUBASE_EMAIL_FROM` / `MAUBASE_PASSWORD_RESET_URL`
   — password reset (see below); all three unset is a valid, common state
   (a deployment that never uses it doesn't need any of them) and gets

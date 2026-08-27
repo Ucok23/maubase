@@ -50,6 +50,11 @@ type Config struct {
 	// body is rejected before it's fully read. See internal/storage.
 	MaxUploadBytes int64
 
+	// MaxRequestBodyBytes caps a single /api/data/* create/update request
+	// body's size; a larger body is rejected (413) before it's fully read
+	// into memory. See internal/restapi.
+	MaxRequestBodyBytes int64
+
 	// ResendAPIKey/EmailFrom configure outgoing transactional email (see
 	// internal/email). Both empty is a valid, common state — a
 	// deployment that never uses password reset doesn't need either —
@@ -104,6 +109,7 @@ func Load() Config {
 		SessionCleanupInterval: getEnvSeconds("MAUBASE_SESSION_CLEANUP_INTERVAL_SECONDS", time.Hour),
 		StorageDir:             getEnv("MAUBASE_STORAGE_DIR", "data/storage"),
 		MaxUploadBytes:         int64(getEnvInt("MAUBASE_MAX_UPLOAD_MB", 25)) * 1024 * 1024,
+		MaxRequestBodyBytes:    int64(getEnvInt("MAUBASE_MAX_REQUEST_BODY_KB", 1024)) * 1024,
 		ResendAPIKey:           getEnv("MAUBASE_RESEND_API_KEY", ""),
 		EmailFrom:              getEnv("MAUBASE_EMAIL_FROM", ""),
 		PasswordResetURL:       getEnv("MAUBASE_PASSWORD_RESET_URL", ""),
