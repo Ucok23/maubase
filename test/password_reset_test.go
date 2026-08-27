@@ -355,3 +355,46 @@ func TestPasswordReset_ResetPasswordIsRateLimited(t *testing.T) {
 		t.Fatalf("attempt over the limit: want 429, got %d", resp.StatusCode)
 	}
 }
+
+func TestPasswordReset_RedeemingOneTokenInvalidatesSiblingTokens(t *testing.T) {
+	// PWRESET-12
+	sender := email.NewFakeSender()
+	baseURL := testserver.NewCustom(t, testserver.Options{EmailSender: sender})
+	signUp(t, newClient(t), baseURL, "pwreset12@example.com", "originalpassword1")
+
+	// Two separate forgot-password requests, two separate outstanding
+	// tokens.
+	forgotPassword(t, newClient(t), baseURL, "pwreset12@example.com")
+	forgotPassword(t, newClient(t), baseURL, "pwreset12@example.com")
+	sent := sender.Sent()
+	if len(sent) != 2 {
+		t.Fatalf("setup: want 2 emails sent, got %d", len(sent))
+	}
+	firstToken := tokenFromResetLink(t, sent[:1])
+	secondToken := tokenFromResetLink(t, sent[1:2])
+	if firstToken == secondToken {
+		t.Fatalf("setup: want two distinct tokens, got the same one twice")
+	}
+
+	// Redeem the first.
+	redeemed := resetPassword(t, baseURL, firstToken, "brandnewpassword1")
+	if redeemed.StatusCode != http.StatusNoContent {
+		t.Fatalf("redeem first token: want 204, got %d: %s", redeemed.StatusCode, bodyString(t, redeemed))
+	}
+
+	// The second, never-redeemed, still-unexpired token must no longer
+	// work — not just the one that was actually used.
+	sibling := resetPassword(t, baseURL, secondToken, "anotherpassword1")
+	if sibling.StatusCode != http.StatusBadRequest {
+		t.Fatalf("redeem sibling token after the other was used: want 400, got %d: %s", sibling.StatusCode, bodyString(t, sibling))
+	}
+
+	// The password from the first (legitimate) redemption is the one
+	// that's actually in effect.
+	login := postJSON(t, newClient(t), baseURL+"/api/auth/login", map[string]string{
+		"email": "pwreset12@example.com", "password": "brandnewpassword1",
+	})
+	if login.StatusCode != http.StatusOK {
+		t.Fatalf("login with the first token's new password: want 200, got %d", login.StatusCode)
+	}
+}
