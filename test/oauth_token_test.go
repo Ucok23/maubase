@@ -82,6 +82,46 @@ func TestOAuthToken_CodeCannotBeReused(t *testing.T) {
 	}
 }
 
+func TestOAuthToken_CodeReplayRevokesOriginalToken(t *testing.T) {
+	// TOK-06
+	baseURL := testserver.New(t)
+	clientID := registerPublicClient(t, baseURL, testRedirectURI, "profile")
+
+	client := newClient(t)
+	signUp(t, client, baseURL, "tok06@example.com", "correcthorse")
+
+	verifier, challenge := pkcePair(t)
+	q := authorizeParams(clientID, testRedirectURI, "profile", "somestate12345678", challenge)
+	resp := approveConsent(t, client, baseURL, q, []string{"profile"}, true)
+	code := locationQuery(t, resp).Get("code")
+
+	firstStatus, first := exchangeCode(t, baseURL, code, testRedirectURI, clientID, verifier)
+	if firstStatus != http.StatusOK {
+		t.Fatalf("setup: first exchange should succeed, got %d: %v", firstStatus, first)
+	}
+	accessToken, _ := first["access_token"].(string)
+	if accessToken == "" {
+		t.Fatalf("setup: want an access_token from the first exchange, got %v", first)
+	}
+
+	// Confirm it works before the replay, so the test proves the replay
+	// is what revoked it.
+	before := mustAuthedGet(t, baseURL+"/api/oauth/whoami", accessToken)
+	if before.StatusCode != http.StatusOK {
+		t.Fatalf("setup: original access token should work before any replay, got %d", before.StatusCode)
+	}
+
+	secondStatus, _ := exchangeCode(t, baseURL, code, testRedirectURI, clientID, verifier)
+	if secondStatus != http.StatusBadRequest {
+		t.Fatalf("want 400 on code reuse, got %d", secondStatus)
+	}
+
+	after := mustAuthedGet(t, baseURL+"/api/oauth/whoami", accessToken)
+	if after.StatusCode == http.StatusOK {
+		t.Fatalf("want the original access token revoked by the replay, got 200: %s", bodyString(t, after))
+	}
+}
+
 func TestOAuthToken_RefreshTokenOnlyWithOfflineAccess(t *testing.T) {
 	baseURL := testserver.New(t)
 	clientID := registerPublicClient(t, baseURL, testRedirectURI, "profile offline_access")

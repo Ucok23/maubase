@@ -19,6 +19,16 @@ when it's submitted to `/oauth/token` a second time,
 then the response is `400` (`invalid_grant`) and no new token is issued —
 replaying a captured code must not work.
 
+## TOK-06: Replaying a code also revokes the token it originally issued
+Given a code already exchanged once for a token (that token still live
+and unexpired),
+when the same code is replayed (TOK-03),
+then, beyond the replay itself failing, the access token issued by the
+*original*, legitimate exchange stops working too — RFC 6749 §4.1.2's
+compromise response to code replay: a second presentation of the same
+code is a signal that code leaked, so whatever was issued from it is no
+longer trustworthy either, not just the replay attempt itself.
+
 ## TOK-04: A refresh token is issued only when `offline_access` was granted
 Given a code exchange where the user granted the `offline_access` scope,
 then the token response includes a `refresh_token`.

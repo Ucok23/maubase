@@ -310,6 +310,52 @@ func TestOwner_ConcurrentDeleteOfBothOwnersLeavesOneStanding(t *testing.T) {
 	}
 }
 
+func TestOwner_DeletedOwnerSessionStopsAuthenticatingImmediately(t *testing.T) {
+	// OWNR-19
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	founder := newClient(t)
+	ownerLogin(t, founder, baseURL, bootstrapEmail, bootstrapPassword)
+
+	const targetEmail, targetPassword = "soon-deleted@example.com", "correcthorse"
+	createResp := createOwner(t, founder, baseURL, targetEmail, targetPassword, "admin")
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("setup: creating the target owner failed: %d", createResp.StatusCode)
+	}
+	targetID, _ := decodeJSONMap(t, createResp)["id"].(string)
+	if targetID == "" {
+		t.Fatalf("setup: couldn't get target owner's id")
+	}
+
+	target := newClient(t)
+	if resp := ownerLogin(t, target, baseURL, targetEmail, targetPassword); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup: target owner login failed: %d", resp.StatusCode)
+	}
+
+	// Confirm the session works before deletion, so the test proves
+	// deletion is what killed it.
+	before := mustGet(t, target, baseURL+"/admin/auth/me")
+	if before.StatusCode != http.StatusOK {
+		t.Fatalf("setup: target's session should work before deletion, got %d", before.StatusCode)
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, baseURL+"/admin/owners/"+targetID, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	delResp, err := founder.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /admin/owners/%s: %v", targetID, err)
+	}
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete target owner: want 204, got %d: %s", delResp.StatusCode, bodyString(t, delResp))
+	}
+
+	after := mustGet(t, target, baseURL+"/admin/auth/me")
+	if after.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("want the deleted owner's session rejected immediately, got %d", after.StatusCode)
+	}
+}
+
 func TestOwner_SessionsDoNotCrossPlanes(t *testing.T) {
 	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
 

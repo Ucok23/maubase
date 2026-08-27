@@ -351,3 +351,50 @@ that owner as actor and carrying the statement text (truncated if very
 long) — unlike every other audited action here, which only logs the
 consequential ones, raw SQL logs every attempt, since the point is a
 complete record of who ran what against the database directly.
+
+## Security posture
+
+The admin UI's entire CSRF defense is `SameSite=Lax` on the owner
+session cookie (`internal/ownerauth.SetCookie`), plus `HttpOnly` and
+`Secure`. There is no CSRF token and no Origin/Referer check anywhere in
+`internal/adminui` or the owner-plane routes. `SameSite=Lax` is a real,
+currently-adequate defense against classic cross-site form CSRF (a
+`Lax` cookie isn't sent on a cross-site `POST`), but it is the *entire*
+defense protecting every state-changing admin-UI action — including SQL
+Studio, the single most destructive surface in the product. A future
+change that loosens `SameSite` (e.g. to fix an unrelated cross-subdomain
+login issue) would silently reopen CSRF on all of it; ADMINUI-34 exists
+to catch that regression at the cookie-attribute level, before it ever
+gets the chance to matter.
+
+Rendering is `html/template` throughout `internal/adminui`, whose
+auto-escaping is what keeps hostile content in emails, table names, and
+data-browser row values from executing as markup — there are no
+`template.HTML(...)` casts anywhere in the package today. ADMINUI-35
+exists to catch a future regression here too (a cast added for "just
+this one rich-text field"), the same way ADMINUI-34 does for the cookie
+attributes.
+
+## ADMINUI-34: The owner session cookie carries every defensive attribute
+Given a successful `POST /admin/auth/login`,
+when the response's `Set-Cookie` header for the owner session cookie is
+inspected,
+then it carries `SameSite=Lax`, `HttpOnly`, and `Secure` — the complete
+CSRF defense described above, locked in at the attribute level so a
+regression here is caught immediately rather than discovered as a live
+vulnerability.
+
+## ADMINUI-35: Hostile markup in rendered content is escaped, not executed
+Given an account or data-browser row created with a value containing
+markup (e.g. an email like
+`<script>window.__xss=1</script>@example.com`, or a row field
+containing `<img onerror=...>`),
+when a page that renders that value (the users list, a data-browser row)
+is requested,
+then the response body contains the HTML-entity-encoded form of that
+value, never the raw, executable markup — proving `html/template`'s
+auto-escaping is actually in effect for hostile input, not just assumed.
+A very long field value (near RFC 5321's ~254-character email limit, or
+several kilobytes for a data-browser value) also renders without an
+error and without breaking the page layout badly enough to hide its
+action buttons.
