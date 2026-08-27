@@ -164,6 +164,31 @@ func TestOAuthAuthorize_RequiresPKCE(t *testing.T) {
 	}
 }
 
+func TestOAuthAuthorize_RejectsUnregisteredRedirectURI(t *testing.T) {
+	baseURL := testserver.New(t)
+	clientID := registerPublicClient(t, baseURL, testRedirectURI, "profile")
+	_, challenge := pkcePair(t)
+
+	client := newClient(t)
+	signUp(t, client, baseURL, "redirectmismatch@example.com", "correcthorse")
+
+	// AUTHZ-08: redirect_uri doesn't match what the client registered.
+	// This must be rejected without ever redirecting anywhere — redirecting
+	// to an attacker-supplied, unregistered URI is exactly the
+	// open-redirect / code-theft vector this check defends against.
+	q := authorizeParams(clientID, "https://evil.example/cb", "profile", "state12345678", challenge)
+	resp, err := client.Get(baseURL + "/oauth/authorize?" + q.Encode())
+	if err != nil {
+		t.Fatalf("GET /oauth/authorize: %v", err)
+	}
+	if resp.StatusCode == http.StatusSeeOther || resp.StatusCode == http.StatusFound {
+		t.Fatalf("must never redirect for an unregistered redirect_uri, got %d to %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if resp.StatusCode < 400 {
+		t.Fatalf("want an error response, got %d", resp.StatusCode)
+	}
+}
+
 func TestOAuthAuthorize_RejectsWeakState(t *testing.T) {
 	baseURL := testserver.New(t)
 	clientID := registerPublicClient(t, baseURL, testRedirectURI, "profile")

@@ -106,3 +106,18 @@ then the server refuses to start (or, if hot-reloadable in a later
 version, refuses to apply the policy) with an error naming the table and
 missing column — an `owner` rule with no `owner_id` to scope by is a
 deployment configuration error, not a runtime 500 waiting to happen.
+
+## ACCESS-09: Realtime events on a shared-write, owner-read table are gated by the row's owner, not the writer
+Given an owner-scoped table with `update: shared` (or `delete: shared`)
+declared and `read` left at its `owner` default — "anyone with write
+scope can change any row, but each caller only reads their own" — and two
+authenticated subjects A and B, where a row belongs to B,
+when A updates or deletes that row,
+then the realtime `updated`/`deleted` event reaches a subscriber
+authenticated as B (the row's actual owner, per spec/realtime.md
+RT-03/RT-04's "only that subject" guarantee), even though B didn't make
+the write,
+and the event does **not** reach a subscriber authenticated as A (the
+writer) merely because A happened to be subscribed — A could never `GET`
+this row (spec/realtime.md RT-05), so seeing its content over the
+subscription would leak it just the same as an API response would.
