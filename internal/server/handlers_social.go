@@ -3,9 +3,12 @@ package server
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+
+	"maubase/internal/auth"
 )
 
 // socialStateCookieName carries the CSRF state token across the redirect
@@ -80,8 +83,25 @@ func (s *Server) handleSocialCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := s.auth.LoginOrCreateViaSocial(r.Context(), provider.Name, identity.ProviderUserID, identity.Email)
+	// If the caller is already signed in, this becomes a "link a second
+	// sign-in method to my account" request rather than an independent
+	// identity resolution — see LoginOrCreateViaSocial's doc comment.
+	// Tolerates a missing/expired/invalid session as simply anonymous,
+	// same as requireAuth's "no credential" case elsewhere — this is the
+	// one social route that must keep working with no session at all.
+	var currentUserID string
+	if token := sessionTokenFromRequest(r); token != "" {
+		if u, err := s.auth.ValidateSession(r.Context(), token); err == nil {
+			currentUserID = u.ID
+		}
+	}
+
+	session, err := s.auth.LoginOrCreateViaSocial(r.Context(), provider.Name, identity.ProviderUserID, identity.Email, currentUserID)
 	if err != nil {
+		if errors.Is(err, auth.ErrSocialIdentityLinkedElsewhere) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
