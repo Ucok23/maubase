@@ -120,3 +120,39 @@ then process B's subscriber receives the event exactly as if the write
 had happened on process B itself. Without `MAUBASE_REDIS_URL` set
 (`Broker`'s default, `NewBroker`), this does not hold — see the note
 above.
+
+## Known limitation: cross-process policy-change skew (multi-process only)
+
+Each maubase process holds its own independently-`Discover()`'d
+`Registry`, reloaded only by that same process's own `ReloadSchema`
+call (triggered by that process's own admin UI — a SQL Studio
+statement, a `_policies` edit, a new table). A gating decision
+(`ownerID`, computed from a collection's *current* `ReadRule` on the
+process that handles a given write) travels with the relayed event
+over Redis and is trusted as-is by every other process's `Broker` — it
+is never re-derived against the receiving process's own registry. That
+means correctness here rests entirely on whichever process happens to
+handle each write already having an up-to-date `ReadRule` for that
+collection.
+
+In a multi-process deployment (`MAUBASE_REDIS_URL` set), a `_policies`
+change made through one process's admin UI takes effect on *that*
+process immediately, but not on its siblings until each independently
+reloads (their own next schema-changing action, or a restart) — there
+is no cross-process invalidation of an in-memory `Registry` today. Until
+a sibling reloads, a write it handles computes `ownerID` from its own
+stale `ReadRule`: a policy that was just widened to `read: shared` on
+one process still narrows delivery to the specific row-owner on a
+stale sibling handling a write (under-sharing); a policy just narrowed
+to `read: owner` still delivers to every subscriber on a stale sibling
+(over-sharing, the more consequential direction). This is specific to
+the exact topology `MAUBASE_REDIS_URL` exists for — a single process
+never has this skew, since there's only one `Registry` to be stale
+against.
+
+**Mitigation today**: restart every process after a `_policies` change
+in a multi-process deployment, the same way any other in-memory-cached
+config change would need one. A cross-process invalidation broadcast
+(publishing a "reload your registry" signal alongside relayed events)
+would close this gap properly; tracked as future work, not implemented
+in v1.

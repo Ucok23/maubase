@@ -307,6 +307,14 @@ is additionally relayed over Redis pub/sub so every other process
 sharing that Redis delivers it to its own subscribers too. See
 `spec/realtime.md` RT-09 and `test/realtime_relay_test.go`.
 
+**Known limitation**: each process's `_policies`-derived access rules
+live in its own in-memory `Registry`, reloaded only by that same
+process's own admin actions — there's no cross-process invalidation.
+After changing `_policies` in a multi-process deployment, restart every
+process (not just the one you made the change on) so they all pick it
+up; see spec/realtime.md's "cross-process policy-change skew" for the
+exact failure mode a stale sibling can otherwise cause.
+
 ## Password reset
 
 `POST /api/auth/forgot-password` (`{"email": "..."}`, always `204`,
