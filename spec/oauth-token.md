@@ -33,3 +33,26 @@ when the client `POST`s `grant_type=refresh_token` with it,
 then it receives a new `access_token` and a new `refresh_token`,
 and the old `refresh_token` no longer works — a stolen-but-already-used
 refresh token can't be replayed.
+
+## TOK-07: Replaying a rotated-out refresh token revokes the whole grant chain
+Given a `refresh_token` that was already redeemed once (rotated away per
+TOK-05), and the fresh `access_token`/`refresh_token` pair that rotation
+produced,
+when the *old*, already-used `refresh_token` is submitted again,
+then the request is rejected (as in TOK-05), and this is now recognized as
+reuse — not just a not-found token — so the entire grant chain is revoked
+as a compromise response: the fresh `access_token` issued by the rotation
+stops working, and the fresh `refresh_token` stops working too. Since the
+authorization server can't tell whether the original client or an
+attacker who stole the old token is the one calling, revoking everything
+downstream of the reused token is the only safe response.
+
+## TOK-08: Two concurrent redemptions of the same refresh token only ever mint one token pair
+Given one valid, unused `refresh_token`,
+when two `POST /oauth/token` (`grant_type=refresh_token`) requests
+carrying the identical token arrive concurrently,
+then exactly one succeeds with a fresh `access_token`/`refresh_token`
+pair, and the other is rejected — never both. A retry-after-slow-response
+from a real OAuth client is a normal occurrence, not an attack, but it
+must not be able to mint two independent, simultaneously-live token pairs
+from what "rotated on use" (TOK-05) promises is a single-use token.

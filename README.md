@@ -32,7 +32,10 @@ What's here now (v1, step 1 of the roadmap):
   - Dynamic client registration: `POST /oauth/register` (RFC 7591)
   - Authorize + built-in login/consent screens: `GET|POST /oauth/authorize`
   - Token endpoint (authorization_code + refresh_token, PKCE mandatory):
-    `POST /oauth/token`
+    `POST /oauth/token`. Refresh tokens rotate on every use; replaying a
+    rotated-away one is detected as reuse (not just "not found") and
+    revokes the entire downstream grant chain — the standard compromise
+    response for a stolen refresh token.
   - Revocation: `POST /oauth/revoke` (RFC 7009)
   - Discovery: `GET /.well-known/oauth-authorization-server` (RFC 8414),
     `GET /.well-known/jwks.json`

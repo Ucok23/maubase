@@ -171,8 +171,54 @@ func TestAccessRules_SharedTableCanStillDenyAnOperation(t *testing.T) {
 	}
 }
 
+func TestAccessRules_SharedWriteRealtimeEventsGatedByRowOwnerNotWriter(t *testing.T) {
+	// ACCESS-09: update/delete: shared with read left at its owner
+	// default — the realtime event for a write must reach the row's
+	// actual owner, not the (different) caller who made the write.
+	baseURL := testserver.NewWithSchema(t, notesSchema,
+		policyRow("notes", "update", "shared"),
+		policyRow("notes", "delete", "shared"))
+	tokenA := restToken(t, baseURL, "ar-sharedwrite-a@example.com", []string{"records:read", "records:write"})
+	tokenB := restToken(t, baseURL, "ar-sharedwrite-b@example.com", []string{"records:read", "records:write"})
+
+	// B owns the row.
+	createResp := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", tokenB, map[string]any{"title": "b's note", "body": "x"})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("B create note: want 201, got %d: %s", createResp.StatusCode, bodyString(t, createResp))
+	}
+	created := decodeJSONMap(t, createResp)
+	id, _ := created["id"].(string)
+
+	rcA := connectRealtime(t, baseURL, tokenA)
+	rcB := connectRealtime(t, baseURL, tokenB)
+	subscribe(t, rcA, "notes")
+	subscribe(t, rcB, "notes")
+
+	// A (not the owner) can write it, since update:shared widens who may.
+	updateResp := doAuthed(t, http.MethodPatch, baseURL+"/api/data/notes/"+id, tokenA, map[string]any{"title": "hijacked"})
+	if updateResp.StatusCode != http.StatusOK {
+		t.Fatalf("A update B's note under update:shared: want 200, got %d: %s", updateResp.StatusCode, bodyString(t, updateResp))
+	}
+	ev := readEvent(t, rcB)
+	if ev.Type != "updated" || ev.Record["id"] != id {
+		t.Fatalf("want B (the row's owner) to receive the updated event, got %+v", ev)
+	}
+	expectNoEvent(t, rcA)
+
+	// Same for delete: shared.
+	delResp := doAuthed(t, http.MethodDelete, baseURL+"/api/data/notes/"+id, tokenA, nil)
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("A delete B's note under delete:shared: want 204, got %d", delResp.StatusCode)
+	}
+	ev = readEvent(t, rcB)
+	if ev.Type != "deleted" || ev.ID != id {
+		t.Fatalf("want B (the row's owner) to receive the deleted event, got %+v", ev)
+	}
+	expectNoEvent(t, rcA)
+}
+
 func TestAccessRules_DeniedReadExcludedFromAccountExport(t *testing.T) {
-	// ACCESS-09
+	// ACCESS-10
 	baseURL := testserver.NewWithSchema(t, notesSchema, tagsSchema, policyRow("notes", "read", "denied"))
 	client := newClient(t)
 	signUp(t, client, baseURL, "ar-deniedexport@example.com", "correcthorse")

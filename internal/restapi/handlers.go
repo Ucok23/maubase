@@ -79,18 +79,28 @@ func (s *Server) publish(col *Collection, ev realtime.Event, ownerID string) {
 	s.broker.Publish(ev, ownerID)
 }
 
-// rowOwnerID returns the value that should gate realtime visibility of an
-// event on col: the acting subject if col's *read* rule is RuleOwner
-// (only that subject could ever GET this row), or "" if reads are
-// RuleShared (every subscriber authorized to read the collection could
-// GET it, regardless of who wrote it) — matching REST-OWNERSHIP-01/02's
-// visibility exactly, not just whether the table happens to have an
-// owner_id column.
-func rowOwnerID(col *Collection, subj string) string {
-	if col.ReadRule == RuleOwner {
-		return subj
+// ownerGateValue returns the value that should gate realtime visibility of
+// an event on col: the row's actual owner_id (read out of record) if col's
+// *read* rule is RuleOwner (only that subject could ever GET this row), or
+// "" if reads are RuleShared (every subscriber authorized to read the
+// collection could GET it, regardless of who wrote it) — matching
+// REST-OWNERSHIP-01/02's visibility exactly, not just whether the table
+// happens to have an owner_id column.
+//
+// This is deliberately the row's owner, not the acting caller's subject:
+// col.UpdateRule/DeleteRule can be RuleShared while ReadRule stays at its
+// RuleOwner default (spec/access-rules.md ACCESS-02), so a caller writing
+// someone else's row is not who is entitled to see it afterward
+// (spec/access-rules.md ACCESS-10).
+func ownerGateValue(col *Collection, record map[string]any) string {
+	if col.ReadRule != RuleOwner || col.OwnerColumn == "" {
+		return ""
 	}
-	return ""
+	v, ok := record[col.OwnerColumn]
+	if !ok || v == nil {
+		return ""
+	}
+	return fmt.Sprint(v)
 }
 
 // Mount registers /api/data/{collection}[/{id}] onto r. Every method is
@@ -232,7 +242,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.publish(col, realtime.Event{Type: "created", Collection: col.Name, Record: record}, rowOwnerID(col, subject(r)))
+	s.publish(col, realtime.Event{Type: "created", Collection: col.Name, Record: record}, ownerGateValue(col, record))
 	writeJSON(w, http.StatusCreated, record)
 }
 
@@ -319,7 +329,7 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.publish(col, realtime.Event{Type: "updated", Collection: col.Name, Record: record}, rowOwnerID(col, subject(r)))
+	s.publish(col, realtime.Event{Type: "updated", Collection: col.Name, Record: record}, ownerGateValue(col, record))
 	writeJSON(w, http.StatusOK, record)
 }
 
@@ -332,6 +342,20 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := chi.URLParam(r, "id")
+
+	// Captured before the DELETE runs — the row won't exist to query
+	// afterward — so the realtime event is gated by the row's actual
+	// owner_id rather than DeleteRule's authorization scope. Those can
+	// differ (spec/access-rules.md ACCESS-10: e.g. delete: shared with the
+	// default read: owner), and it's the row's owner, not whoever deleted
+	// it, who was ever entitled to see it. Best-effort: if the lookup
+	// fails, gateVal stays "" and the event just won't reach anyone, same
+	// as if reads were RuleShared.
+	var gateVal string
+	if col.ReadRule == RuleOwner && col.OwnerColumn != "" {
+		gateVal, _ = s.ownerValueForPK(r.Context(), col, id)
+	}
+
 	query := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", quoteIdent(col.Name), quoteIdent(col.PKColumn))
 	args := []any{id}
 	if col.DeleteRule == RuleOwner {
@@ -348,7 +372,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
-	s.publish(col, realtime.Event{Type: "deleted", Collection: col.Name, ID: id}, rowOwnerID(col, subject(r)))
+	s.publish(col, realtime.Event{Type: "deleted", Collection: col.Name, ID: id}, gateVal)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -430,6 +454,23 @@ func (s *Server) pkValuesForOwner(ctx context.Context, col *Collection, subj str
 		ids = append(ids, fmt.Sprint(v))
 	}
 	return ids, rows.Err()
+}
+
+// ownerValueForPK returns the value of col's owner column for the row
+// identified by pkValue, stringified. Used by handleDelete to capture a
+// row's actual owner *before* removing it, since the DELETE itself doesn't
+// return column values and the row won't exist to query afterward.
+func (s *Server) ownerValueForPK(ctx context.Context, col *Collection, pkValue any) (string, error) {
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s = ?", quoteIdent(col.OwnerColumn), quoteIdent(col.Name), quoteIdent(col.PKColumn))
+	var v any
+	if err := s.db.QueryRowContext(ctx, query, pkValue).Scan(&v); err != nil {
+		return "", err
+	}
+	v = normalizeValue(v)
+	if v == nil {
+		return "", nil
+	}
+	return fmt.Sprint(v), nil
 }
 
 // --- helpers ---------------------------------------------------------------
