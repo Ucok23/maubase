@@ -66,3 +66,15 @@ redirect to either URI — redirecting to an unregistered URI is exactly
 the open-redirect / authorization-code-theft this check exists to
 prevent), even for a signed-in user who would otherwise sail through
 consent.
+
+## AUTHZ-10: A client is confined to its own registered scopes
+Given a client registered with only `profile` in its scope list,
+when an authorize request asks for a scope that's valid globally but
+outside that client's own registered scopes (e.g. `records:write`),
+then the request is rejected up front (redirected back with
+`error=invalid_scope`, before any login or consent screen — the same
+"before any user interaction" posture AUTHZ-07 takes for a weak state),
+even for a signed-in user who would otherwise sail through consent —
+scope self-declaration at registration time would be theater if any
+registered client could silently request any scope in the server's
+global vocabulary regardless of what it declared.
