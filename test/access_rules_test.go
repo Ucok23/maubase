@@ -263,3 +263,51 @@ func TestAccessRules_OwnerRuleWithoutOwnerColumnFailsAtStartup(t *testing.T) {
 		t.Fatalf("want the error to name the table and the missing column, got: %v", err)
 	}
 }
+
+func TestAccessRules_AccountErasureIgnoresDeletePolicy(t *testing.T) {
+	// ACCESS-11
+	baseURL := testserver.NewWithSchema(t, notesSchema,
+		policyRow("notes", "delete", "denied"),
+		// read:shared so a witness token (a different user entirely) can
+		// see this row before and after, regardless of who owns it —
+		// otherwise the default owner-scoped read would make a witness's
+		// GET 404 whether or not the row still exists, proving nothing.
+		policyRow("notes", "read", "shared"))
+
+	client := newClient(t)
+	signUp(t, client, baseURL, "ar-erasure@example.com", "correcthorse")
+	token := restTokenForClient(t, baseURL, client)
+
+	createResp := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", token, map[string]any{"title": "should survive only the direct route", "body": "x"})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create note: want 201, got %d: %s", createResp.StatusCode, bodyString(t, createResp))
+	}
+	id, _ := decodeJSONMap(t, createResp)["id"].(string)
+
+	// Confirm delete:denied is actually in effect first: the row's own
+	// owner can't remove it via the ordinary REST route.
+	directDelete := doAuthed(t, http.MethodDelete, baseURL+"/api/data/notes/"+id, token, nil)
+	if directDelete.StatusCode != http.StatusForbidden {
+		t.Fatalf("setup: direct delete under delete:denied: want 403, got %d", directDelete.StatusCode)
+	}
+	witnessToken := restToken(t, baseURL, "ar-erasure-witness@example.com", []string{"records:read", "records:write"})
+	stillThere := doAuthed(t, http.MethodGet, baseURL+"/api/data/notes/"+id, witnessToken, nil)
+	if stillThere.StatusCode != http.StatusOK {
+		t.Fatalf("setup: want the row still present after the refused delete, got %d", stillThere.StatusCode)
+	}
+
+	// Account erasure deletes it anyway — DeleteOwned never consults
+	// DeleteRule.
+	del, err := client.Do(mustRequest(t, http.MethodDelete, baseURL+"/api/auth/me"))
+	if err != nil {
+		t.Fatalf("DELETE /api/auth/me: %v", err)
+	}
+	if del.StatusCode != http.StatusNoContent {
+		t.Fatalf("want 204, got %d: %s", del.StatusCode, bodyString(t, del))
+	}
+
+	gone := doAuthed(t, http.MethodGet, baseURL+"/api/data/notes/"+id, witnessToken, nil)
+	if gone.StatusCode != http.StatusNotFound {
+		t.Fatalf("want the row gone after account erasure despite delete:denied, got %d", gone.StatusCode)
+	}
+}
