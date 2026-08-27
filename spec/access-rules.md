@@ -121,3 +121,13 @@ and the event does **not** reach a subscriber authenticated as A (the
 writer) merely because A happened to be subscribed — A could never `GET`
 this row (spec/realtime.md RT-05), so seeing its content over the
 subscription would leak it just the same as an API response would.
+
+## ACCESS-10: A denied read is excluded from account export too
+Given an owner-scoped table with `read: denied` declared,
+when the row's owner requests `GET /api/auth/me/export`,
+then that table's rows are absent from the export entirely — not present
+as an empty list, not present at all — even though the caller genuinely
+owns them. `read: denied` means no caller may read that collection
+through this API "regardless of caller or scope" (ACCESS-06); an export
+endpoint handing the same data back through a different door would
+contradict that guarantee.
