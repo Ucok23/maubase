@@ -56,3 +56,13 @@ shorter than 8 characters,
 then the request is rejected before any user interaction (redirected
 back with `error=invalid_state`), since a short state is too easy to
 guess and defeats its purpose as a CSRF token.
+
+## AUTHZ-08: An unregistered redirect_uri is rejected before any redirect
+Given a client registered with only `https://legit.example/cb`,
+when an authorize request supplies a different `redirect_uri` (e.g.
+`https://evil.example/cb`),
+then the request is rejected with an error page served directly (no
+redirect to either URI — redirecting to an unregistered URI is exactly
+the open-redirect / authorization-code-theft this check exists to
+prevent), even for a signed-in user who would otherwise sail through
+consent.
