@@ -356,10 +356,18 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 // belongs to subj, keyed by collection name — the data behind a "give me
 // everything you have on me" account export. Shared (non-owner-scoped)
 // tables are excluded: their rows aren't specifically the caller's by the
-// same ownership convention enforced everywhere else in this package.
+// same ownership convention enforced everywhere else in this package. A
+// collection with read: denied is also excluded (spec/access-rules.md
+// ACCESS-06/09): that policy means no caller may read it through this API
+// regardless of scope, and export is a read — handing the same data back
+// through a different endpoint than the one the policy locked down would
+// contradict every other RuleDenied enforcement point in this package.
 func (s *Server) ExportOwned(ctx context.Context, subj string) (map[string][]map[string]any, error) {
 	out := map[string][]map[string]any{}
 	for _, col := range s.reg().ownedCollections() {
+		if col.ReadRule == RuleDenied {
+			continue
+		}
 		query := fmt.Sprintf("SELECT * FROM %s WHERE %s = ?", quoteIdent(col.Name), quoteIdent(col.OwnerColumn))
 		rows, err := s.db.QueryContext(ctx, query, subj)
 		if err != nil {

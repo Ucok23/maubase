@@ -171,6 +171,39 @@ func TestAccessRules_SharedTableCanStillDenyAnOperation(t *testing.T) {
 	}
 }
 
+func TestAccessRules_DeniedReadExcludedFromAccountExport(t *testing.T) {
+	// ACCESS-09
+	baseURL := testserver.NewWithSchema(t, notesSchema, tagsSchema, policyRow("notes", "read", "denied"))
+	client := newClient(t)
+	signUp(t, client, baseURL, "ar-deniedexport@example.com", "correcthorse")
+	token := restTokenForClient(t, baseURL, client)
+
+	createResp := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", token, map[string]any{"title": "x", "body": "x"})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create note: want 201, got %d: %s", createResp.StatusCode, bodyString(t, createResp))
+	}
+
+	// Confirm read:denied is actually in effect first, so the test proves
+	// the policy is what kept it out of the export below.
+	listResp := doAuthed(t, http.MethodGet, baseURL+"/api/data/notes", token, nil)
+	if listResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("setup: list under read:denied: want 403, got %d", listResp.StatusCode)
+	}
+
+	exportResp, err := client.Get(baseURL + "/api/auth/me/export")
+	if err != nil {
+		t.Fatalf("GET /api/auth/me/export: %v", err)
+	}
+	if exportResp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", exportResp.StatusCode, bodyString(t, exportResp))
+	}
+	body := decodeJSONMap(t, exportResp)
+	records, _ := body["records"].(map[string]any)
+	if _, present := records["notes"]; present {
+		t.Fatalf("want notes (read:denied) absent from export entirely, got %v", records)
+	}
+}
+
 func TestAccessRules_OwnerRuleWithoutOwnerColumnFailsAtStartup(t *testing.T) {
 	// ACCESS-08
 	err := testserver.NewCustomExpectingDiscoverError(t, testserver.Options{
