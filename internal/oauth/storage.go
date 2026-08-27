@@ -193,11 +193,28 @@ func (s *Storage) DeleteRefreshTokenSession(ctx context.Context, signature strin
 // deleted — see GetRefreshTokenSession) when a client redeems it for a new
 // access/refresh token pair, so a stolen-but-already-used refresh token
 // replayed later is recognized as reuse rather than merely "not found".
+//
+// The WHERE clause requires active = 1 and the RowsAffected check makes
+// this the actual commit point for "did this exact redemption win the
+// race": two concurrent requests presenting the identical refresh token
+// both pass GetRefreshTokenSession's check (neither has rotated yet), but
+// only one of their UPDATEs can flip active 1->0 — SQLite serializes
+// statements on the single shared connection, so there's no window for
+// both to match. The loser's zero-rows UPDATE returns ErrInactiveToken
+// here, which Fosite maps to a plain invalid_request response, aborting
+// that request's CreateAccessTokenSession/CreateRefreshTokenSession before
+// it can mint a second, independent token pair from the same redemption.
 func (s *Storage) RotateRefreshToken(ctx context.Context, requestID string, refreshTokenSignature string) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE oauth_refresh_tokens SET active = 0 WHERE signature = ? AND request_id = ?
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE oauth_refresh_tokens SET active = 0 WHERE signature = ? AND request_id = ? AND active = 1
 	`, refreshTokenSignature, requestID)
-	return err
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fosite.ErrInactiveToken
+	}
+	return nil
 }
 
 // --- revocation (RFC 7009) ----------------------------------------------
