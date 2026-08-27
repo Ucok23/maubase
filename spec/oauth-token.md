@@ -33,3 +33,16 @@ when the client `POST`s `grant_type=refresh_token` with it,
 then it receives a new `access_token` and a new `refresh_token`,
 and the old `refresh_token` no longer works — a stolen-but-already-used
 refresh token can't be replayed.
+
+## TOK-07: Replaying a rotated-out refresh token revokes the whole grant chain
+Given a `refresh_token` that was already redeemed once (rotated away per
+TOK-05), and the fresh `access_token`/`refresh_token` pair that rotation
+produced,
+when the *old*, already-used `refresh_token` is submitted again,
+then the request is rejected (as in TOK-05), and this is now recognized as
+reuse — not just a not-found token — so the entire grant chain is revoked
+as a compromise response: the fresh `access_token` issued by the rotation
+stops working, and the fresh `refresh_token` stops working too. Since the
+authorization server can't tell whether the original client or an
+attacker who stole the old token is the one calling, revoking everything
+downstream of the reused token is the only safe response.

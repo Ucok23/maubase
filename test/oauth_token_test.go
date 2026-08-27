@@ -143,3 +143,71 @@ func TestOAuthToken_RefreshTokenRotates(t *testing.T) {
 		t.Fatalf("want the rotated-out refresh token to be rejected, got 200: %v", replayBody)
 	}
 }
+
+func TestOAuthToken_RefreshTokenReuseRevokesWholeChain(t *testing.T) {
+	// TOK-07
+	baseURL := testserver.New(t)
+	clientID := registerPublicClient(t, baseURL, testRedirectURI, "profile offline_access")
+
+	client := newClient(t)
+	signUp(t, client, baseURL, "tok07@example.com", "correcthorse")
+	tok := authorizeAndGetToken(t, client, baseURL, clientID, testRedirectURI, []string{"profile", "offline_access"})
+	oldRefresh, _ := tok["refresh_token"].(string)
+	if oldRefresh == "" {
+		t.Fatalf("setup: want a refresh_token, got %v", tok)
+	}
+
+	// Rotate once, legitimately, producing a fresh pair.
+	form := func(refresh string) map[string][]string {
+		return map[string][]string{
+			"grant_type":    {"refresh_token"},
+			"refresh_token": {refresh},
+			"client_id":     {clientID},
+		}
+	}
+	firstRotate, err := http.PostForm(baseURL+"/oauth/token", form(oldRefresh))
+	if err != nil {
+		t.Fatalf("POST /oauth/token (rotate): %v", err)
+	}
+	rotated := decodeJSONMap(t, firstRotate)
+	if firstRotate.StatusCode != http.StatusOK {
+		t.Fatalf("setup: rotation should succeed, got %d: %v", firstRotate.StatusCode, rotated)
+	}
+	freshAccess, _ := rotated["access_token"].(string)
+	freshRefresh, _ := rotated["refresh_token"].(string)
+	if freshAccess == "" || freshRefresh == "" {
+		t.Fatalf("setup: want a fresh access+refresh token pair, got %v", rotated)
+	}
+
+	// Confirm the fresh access token actually works before the reuse
+	// attack, so the test proves reuse detection is what breaks it.
+	before := mustAuthedGet(t, baseURL+"/api/oauth/whoami", freshAccess)
+	if before.StatusCode != http.StatusOK {
+		t.Fatalf("setup: fresh access token should work before reuse is detected, got %d", before.StatusCode)
+	}
+
+	// Replay the OLD (already-rotated-away) refresh token — this is the
+	// reuse signal: only an attacker holding a stale, stolen token (or a
+	// client that lost track of rotation) would ever present it again.
+	replay, err := http.PostForm(baseURL+"/oauth/token", form(oldRefresh))
+	if err != nil {
+		t.Fatalf("POST /oauth/token (replay old refresh token): %v", err)
+	}
+	if replay.StatusCode == http.StatusOK {
+		t.Fatalf("want the reused refresh token rejected, got 200: %v", decodeJSONMap(t, replay))
+	}
+
+	// The whole chain downstream of the reused token must now be dead:
+	// both the fresh access token and the fresh refresh token it minted.
+	after := mustAuthedGet(t, baseURL+"/api/oauth/whoami", freshAccess)
+	if after.StatusCode == http.StatusOK {
+		t.Fatalf("want the fresh access token revoked by reuse detection, got 200: %s", bodyString(t, after))
+	}
+	secondRotate, err := http.PostForm(baseURL+"/oauth/token", form(freshRefresh))
+	if err != nil {
+		t.Fatalf("POST /oauth/token (attempt to use the fresh refresh token after reuse detection): %v", err)
+	}
+	if secondRotate.StatusCode == http.StatusOK {
+		t.Fatalf("want the fresh refresh token revoked by reuse detection too, got 200: %v", decodeJSONMap(t, secondRotate))
+	}
+}
