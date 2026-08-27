@@ -149,3 +149,27 @@ also recorded per OWNR-15),
 then the original `owner_create` entry is unchanged and still shows that
 account's email — deleting an account doesn't erase the history of what
 it did or what was done to it.
+
+## OWNR-18: Concurrent deletes of both remaining owners still leave one standing
+Given exactly two owner-role accounts,
+when each deletes itself via its own session, concurrently (not
+sequentially),
+then exactly one succeeds (`204`) and the other is rejected (`409`,
+OWNR-08's "last remaining owner" guard) — the guard must hold even when
+two requests race to be the one that empties the deployment down to
+zero owners, not just when a second request arrives after the first has
+already committed.
+
+## OWNR-19: Deleting an owner invalidates their live session immediately
+Given an owner-plane account currently signed in with a live session
+cookie,
+when a second owner deletes that account via `DELETE /admin/owners/{id}`,
+then the deleted account's session cookie no longer authenticates any
+`/admin/*` or `/admin/ui/*` route right away — not just once its 7-day
+TTL eventually elapses. `owner_sessions.owner_id REFERENCES
+owner_users(id) ON DELETE CASCADE` (with `foreign_keys` enforcement on)
+is what makes this true; this scenario exercises the actual outcome
+rather than trusting the schema declaration, so a regression here (a
+migration tool that disables FK enforcement, a driver/DSN change) is
+caught immediately instead of leaving a just-removed owner fully
+authenticated for up to a week with nothing to notice.

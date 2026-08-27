@@ -1050,6 +1050,87 @@ func TestAdminUI_SortsRowsByColumn(t *testing.T) {
 	}
 }
 
+func TestAdminUI_OwnerSessionCookieHasDefensiveAttributes(t *testing.T) {
+	// ADMINUI-34
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	resp := adminUILogin(t, newClient(t), baseURL, bootstrapEmail, bootstrapPassword)
+
+	var found *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == "maubase_owner_session" {
+			found = c
+		}
+	}
+	if found == nil {
+		t.Fatalf("want the owner session cookie set, got %v", resp.Cookies())
+	}
+	if found.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("want SameSite=Lax, got %v", found.SameSite)
+	}
+	if !found.HttpOnly {
+		t.Fatalf("want HttpOnly, got false")
+	}
+	if !found.Secure {
+		t.Fatalf("want Secure, got false")
+	}
+}
+
+func TestAdminUI_HostileMarkupIsEscapedNotExecuted(t *testing.T) {
+	// ADMINUI-35
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		Schema: []string{notesSchema},
+	})
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	// A customer account whose email carries markup, shown on the users
+	// list.
+	const hostileEmail = `<script>window.__xss=1</script>@example.com`
+	signUp(t, newClient(t), baseURL, hostileEmail, "correcthorse")
+
+	usersBody := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/users"))
+	if strings.Contains(usersBody, "<script>window.__xss") {
+		t.Fatalf("want the hostile email HTML-escaped, got raw markup in users page: %s", usersBody)
+	}
+	if !strings.Contains(usersBody, "&lt;script&gt;") {
+		t.Fatalf("want the escaped form of the hostile email present, got: %s", usersBody)
+	}
+
+	// A data-browser row whose value carries markup.
+	hostileToken := restToken(t, baseURL, "hostile-row-owner@example.com", []string{"records:read", "records:write"})
+	const hostileTitle = `<img src=x onerror="window.__xss=1">`
+	createResp := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", hostileToken, map[string]any{"title": hostileTitle, "body": "x"})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create hostile note: want 201, got %d: %s", createResp.StatusCode, bodyString(t, createResp))
+	}
+
+	rowsBody := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes"))
+	if strings.Contains(rowsBody, `<img src=x onerror=`) {
+		t.Fatalf("want the hostile row value HTML-escaped, got raw markup in data browser: %s", rowsBody)
+	}
+	if !strings.Contains(rowsBody, "&lt;img") {
+		t.Fatalf("want the escaped form of the hostile row value present, got: %s", rowsBody)
+	}
+
+	// A very long field renders without erroring or losing its action
+	// buttons — same page, not a separate one, since it's the same
+	// rendering path under a different kind of stress.
+	longEmail := strings.Repeat("a", 240) + "@example.com"
+	signUp(t, newClient(t), baseURL, longEmail, "correcthorse")
+	longUsersResp := doGetNoRedirect(t, owner, baseURL+"/admin/ui/users")
+	if longUsersResp.StatusCode != http.StatusOK {
+		t.Fatalf("users page with a long email present: want 200, got %d", longUsersResp.StatusCode)
+	}
+	longUsersBody := bodyString(t, longUsersResp)
+	if !strings.Contains(longUsersBody, longEmail) {
+		t.Fatalf("want the long email rendered somewhere on the page")
+	}
+	if !strings.Contains(longUsersBody, "Create") && !strings.Contains(longUsersBody, "/admin/ui") {
+		t.Fatalf("want the page's normal chrome (nav/actions) still present alongside a long value, got: %s", longUsersBody)
+	}
+}
+
 // idFromRowHTML extracts the id chi assigned a newly created row from its
 // id="row-{id}" attribute in a rendered data_rows page, by finding the
 // <tr> whose text contains marker.
