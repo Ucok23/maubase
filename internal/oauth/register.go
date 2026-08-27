@@ -8,10 +8,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+)
+
+// Registration payloads are inherently small (a handful of short strings
+// and a few URIs) — these are fixed limits, not deployment-tunable config,
+// same way a JWT header size or a UUID length wouldn't be.
+const (
+	maxRegisterBodyBytes = 16 * 1024
+	maxRedirectURIs      = 20
+	maxRedirectURILen    = 2048
+	maxClientNameLen     = 200
 )
 
 // allowed values we support; anything else in a registration request is
@@ -50,15 +61,50 @@ type registerResponse struct {
 // confidential clients, a client_secret) before ever talking to a human —
 // that's the whole point: no admin has to pre-provision a client_id.
 func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRegisterBodyBytes)
 	var req registerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeRegisterError(w, http.StatusBadRequest, "invalid_client_metadata", "malformed JSON body")
+		writeRegisterError(w, http.StatusBadRequest, "invalid_client_metadata", "malformed JSON body, or body too large")
+		return
+	}
+
+	if len(req.ClientName) > maxClientNameLen {
+		writeRegisterError(w, http.StatusBadRequest, "invalid_client_metadata",
+			fmt.Sprintf("client_name too long (max %d characters)", maxClientNameLen))
 		return
 	}
 
 	if len(req.RedirectURIs) == 0 {
 		writeRegisterError(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uris is required")
 		return
+	}
+	if len(req.RedirectURIs) > maxRedirectURIs {
+		writeRegisterError(w, http.StatusBadRequest, "invalid_redirect_uri",
+			fmt.Sprintf("too many redirect_uris (max %d)", maxRedirectURIs))
+		return
+	}
+	for _, ru := range req.RedirectURIs {
+		if len(ru) > maxRedirectURILen {
+			writeRegisterError(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uri too long")
+			return
+		}
+		u, err := url.Parse(ru)
+		if err != nil || !u.IsAbs() {
+			writeRegisterError(w, http.StatusBadRequest, "invalid_redirect_uri",
+				fmt.Sprintf("redirect_uri %q is not a well-formed absolute URI", ru))
+			return
+		}
+		if u.Fragment != "" {
+			// RFC 6749 §3.1.2: "The redirection endpoint URI MUST NOT
+			// include a fragment component." A fragment is never sent to
+			// the server anyway (it's stripped client-side before the
+			// request goes out), so one here can only be a
+			// misconfiguration worth catching at registration time
+			// rather than as a confusing failure at /oauth/authorize.
+			writeRegisterError(w, http.StatusBadRequest, "invalid_redirect_uri",
+				fmt.Sprintf("redirect_uri %q must not include a fragment", ru))
+			return
+		}
 	}
 
 	authMethod := req.TokenEndpointAuthMethod

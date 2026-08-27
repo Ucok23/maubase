@@ -35,6 +35,15 @@ type Server struct {
 	router    chi.Router
 
 	loginLimiter *ratelimit.Limiter
+	// registerLimiter is deliberately its own bucket, not loginLimiter's:
+	// POST /oauth/register is called incidentally by all sorts of
+	// legitimate setup (a client registering once before ever attempting
+	// a login), so sharing loginLimiter's budget would let registration
+	// traffic eat into — or outright exhaust — an IP's login-attempt
+	// allowance, an unrelated-endpoint interference this project
+	// otherwise avoids (see internal/adminui.Server's own separate
+	// limiter instance, for the same reason).
+	registerLimiter *ratelimit.Limiter
 
 	email            email.Sender
 	passwordResetURL string
@@ -62,6 +71,7 @@ func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.
 	s := &Server{
 		auth: authSvc, oauth: oauthSvc, ownerAuth: ownerAuthSvc, restapi: restapiSvc, storage: storageSvc, realtime: realtimeSvc, adminui: adminuiSvc, audit: auditLog,
 		loginLimiter:        ratelimit.New(loginRateLimit, loginRateWindow),
+		registerLimiter:     ratelimit.New(loginRateLimit, loginRateWindow),
 		email:               emailSender,
 		passwordResetURL:    passwordResetURL,
 		socialProviders:     socialProviders,
@@ -124,7 +134,12 @@ func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.
 	r.With(s.rateLimitLogin).Post("/oauth/authorize", s.oauth.HandleAuthorize)
 	r.Post("/oauth/token", s.oauth.HandleToken)
 	r.Post("/oauth/revoke", s.oauth.HandleRevoke)
-	r.Post("/oauth/register", s.oauth.HandleRegister)
+	// Dynamic client registration (RFC 7591) is unauthenticated by design
+	// — that's the whole point, an MCP client needs zero setup — which
+	// also makes it a classic anonymous-endpoint abuse target (unbounded
+	// oauth_clients row growth). Its own limiter, not loginLimiter's
+	// shared budget — see registerLimiter's doc comment.
+	r.With(s.rateLimitRegister).Post("/oauth/register", s.oauth.HandleRegister)
 	r.Get("/.well-known/oauth-authorization-server", s.oauth.HandleAuthServerMetadata)
 	r.Get("/.well-known/jwks.json", s.oauth.HandleJWKS)
 
@@ -201,15 +216,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // treated as disabled, since ratelimit.Limiter itself has no "unlimited"
 // mode.
 func (s *Server) rateLimitLogin(next http.Handler) http.Handler {
+	return rateLimitMiddleware(s.loginLimiter, "too many login attempts", next)
+}
+
+// rateLimitRegister throttles POST /oauth/register per client IP, via its
+// own limiter instance — see registerLimiter's doc comment for why this
+// isn't just rateLimitLogin again.
+func (s *Server) rateLimitRegister(next http.Handler) http.Handler {
+	return rateLimitMiddleware(s.registerLimiter, "too many registration attempts", next)
+}
+
+func rateLimitMiddleware(limiter *ratelimit.Limiter, message string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.loginLimiter.Limit <= 0 {
+		if limiter.Limit <= 0 {
 			next.ServeHTTP(w, r)
 			return
 		}
 		key := clientIP(r)
-		if ok, retryAfter := s.loginLimiter.Allow(key); !ok {
+		if ok, retryAfter := limiter.Allow(key); !ok {
 			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())+1))
-			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many login attempts"})
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": message})
 			return
 		}
 		next.ServeHTTP(w, r)
