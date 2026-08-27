@@ -190,6 +190,73 @@ func TestIdentity_DeleteAccountDoesNotAffectOtherUsers(t *testing.T) {
 	}
 }
 
+func TestIdentity_ListAndRevokeConsent(t *testing.T) {
+	// AUTHZ-11 (spec/oauth-authorize-and-consent.md)
+	baseURL := testserver.New(t)
+	clientID := registerPublicClient(t, baseURL, testRedirectURI, "profile records:read")
+
+	client := newClient(t)
+	signUp(t, client, baseURL, "consent-mgmt@example.com", "correcthorse")
+	accessToken := authorizeAndGetToken(t, client, baseURL, clientID, testRedirectURI, []string{"profile", "records:read"})["access_token"].(string)
+
+	// The token works before revocation, so the test proves revocation
+	// is what changed the outcome.
+	before := mustAuthedGet(t, baseURL+"/api/oauth/whoami", accessToken)
+	if before.StatusCode != http.StatusOK {
+		t.Fatalf("setup: token should work before revocation, got %d", before.StatusCode)
+	}
+
+	listResp, err := client.Get(baseURL + "/api/auth/me/consents")
+	if err != nil {
+		t.Fatalf("GET /api/auth/me/consents: %v", err)
+	}
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", listResp.StatusCode, bodyString(t, listResp))
+	}
+	listBody := decodeJSONMap(t, listResp)
+	consents, _ := listBody["consents"].([]any)
+	if len(consents) != 1 {
+		t.Fatalf("want exactly 1 consent listed, got %d: %v", len(consents), consents)
+	}
+	entry, _ := consents[0].(map[string]any)
+	if entry["client_id"] != clientID {
+		t.Fatalf("want the registered client listed, got %v", entry)
+	}
+
+	delReq := mustRequest(t, http.MethodDelete, baseURL+"/api/auth/me/consents/"+clientID)
+	delResp, err := client.Do(delReq)
+	if err != nil {
+		t.Fatalf("DELETE /api/auth/me/consents/%s: %v", clientID, err)
+	}
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("want 204, got %d: %s", delResp.StatusCode, bodyString(t, delResp))
+	}
+
+	// The previously-issued access token no longer works.
+	after := mustAuthedGet(t, baseURL+"/api/oauth/whoami", accessToken)
+	if after.StatusCode == http.StatusOK {
+		t.Fatalf("want the revoked client's token rejected, got 200: %s", bodyString(t, after))
+	}
+
+	// The consent list is now empty.
+	afterList := decodeJSONMap(t, mustGet(t, client, baseURL+"/api/auth/me/consents"))
+	afterConsents, _ := afterList["consents"].([]any)
+	if len(afterConsents) != 0 {
+		t.Fatalf("want no consents left after revocation, got %v", afterConsents)
+	}
+
+	// A later authorize request for this client shows the consent screen
+	// again, from a clean slate.
+	q := authorizeParams(clientID, testRedirectURI, "profile", "freshstate12345", mustChallenge(t))
+	fresh, err := client.Get(baseURL + "/oauth/authorize?" + q.Encode())
+	if err != nil {
+		t.Fatalf("GET /oauth/authorize: %v", err)
+	}
+	if fresh.StatusCode != http.StatusOK {
+		t.Fatalf("want the consent screen shown again after revocation, got %d", fresh.StatusCode)
+	}
+}
+
 func TestIdentity_ExportAndDeleteRequireAuth(t *testing.T) {
 	baseURL := testserver.New(t)
 	client := newClient(t) // never signed in

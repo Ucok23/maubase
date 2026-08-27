@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -215,6 +216,87 @@ func TestOAuthAuthorize_ConfinedToOwnRegisteredScopes(t *testing.T) {
 	if loc.Get("code") != "" {
 		t.Fatalf("want no code issued, got %v", loc)
 	}
+}
+
+func TestOAuthAuthorize_ReConsentShowsAndCanRevokePreviousGrant(t *testing.T) {
+	// AUTHZ-11
+	baseURL := testserver.New(t)
+	clientID := registerPublicClient(t, baseURL, testRedirectURI, "profile records:read records:write")
+
+	client := newClient(t)
+	signUp(t, client, baseURL, "reconsent@example.com", "correcthorse")
+
+	// First authorization: profile + records:read.
+	first := approveConsent(t, client, baseURL,
+		authorizeParams(clientID, testRedirectURI, "profile records:read", "firststate1234", mustChallenge(t)),
+		[]string{"profile", "records:read"}, true)
+	if first.StatusCode != http.StatusSeeOther || locationQuery(t, first).Get("code") == "" {
+		t.Fatalf("setup: first authorization should succeed, got %d", first.StatusCode)
+	}
+
+	// Second authorization asks for a new scope (records:write). The
+	// consent screen must show BOTH the newly requested scope and the
+	// previously granted ones, distinctly.
+	q2 := authorizeParams(clientID, testRedirectURI, "records:write", "secondstate1234", mustChallenge(t))
+	getResp, err := client.Get(baseURL + "/oauth/authorize?" + q2.Encode())
+	if err != nil {
+		t.Fatalf("GET /oauth/authorize: %v", err)
+	}
+	consentBody := bodyString(t, getResp)
+	if !strings.Contains(consentBody, "records:write") {
+		t.Fatalf("want the newly requested scope shown, got: %s", consentBody)
+	}
+	if !strings.Contains(consentBody, "profile") || !strings.Contains(consentBody, "records:read") {
+		t.Fatalf("want the previously granted scopes shown too, got: %s", consentBody)
+	}
+
+	// Approve the new request, but revoke "profile" by leaving it out of
+	// "keep" (only records:read, the other previously-granted scope, is
+	// kept).
+	form := url.Values{}
+	form.Set("step", "consent")
+	form.Set("oauth_request", q2.Encode())
+	form.Set("decision", "allow")
+	form.Add("granted", "records:write")
+	form.Add("keep", "records:read")
+	resp, err := client.PostForm(baseURL+"/oauth/authorize", form)
+	if err != nil {
+		t.Fatalf("POST /oauth/authorize (consent): %v", err)
+	}
+	if resp.StatusCode != http.StatusSeeOther || locationQuery(t, resp).Get("code") == "" {
+		t.Fatalf("second authorization: want a redirect with a code, got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+
+	// A later request for "profile" alone must show the consent screen
+	// again — it's no longer part of what's on file.
+	q3 := authorizeParams(clientID, testRedirectURI, "profile", "thirdstate12345", mustChallenge(t))
+	third, err := client.Get(baseURL + "/oauth/authorize?" + q3.Encode())
+	if err != nil {
+		t.Fatalf("GET /oauth/authorize: %v", err)
+	}
+	if third.StatusCode != http.StatusOK {
+		t.Fatalf("want the consent screen shown again for the revoked scope, got %d (straight-through redirect would mean it's still silently granted)", third.StatusCode)
+	}
+
+	// A later request for "records:read" alone (still kept) should still
+	// skip the consent screen.
+	q4 := authorizeParams(clientID, testRedirectURI, "records:read", "fourthstate1234", mustChallenge(t))
+	fourth, err := client.Get(baseURL + "/oauth/authorize?" + q4.Encode())
+	if err != nil {
+		t.Fatalf("GET /oauth/authorize: %v", err)
+	}
+	if fourth.StatusCode != http.StatusSeeOther {
+		t.Fatalf("want the kept scope to still skip consent, got %d: %s", fourth.StatusCode, bodyString(t, fourth))
+	}
+}
+
+// mustChallenge is pkcePair's challenge half only, for call sites that
+// never need the verifier (a consent flow this test never exchanges a
+// code from).
+func mustChallenge(t *testing.T) string {
+	t.Helper()
+	_, challenge := pkcePair(t)
+	return challenge
 }
 
 func TestOAuthAuthorize_RejectsWeakState(t *testing.T) {

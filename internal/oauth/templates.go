@@ -31,6 +31,12 @@ var consentTpl = template.Must(template.New("consent").Parse(`<!doctype html>
 {{range .Scopes}}
 <div><label><input type="checkbox" name="granted" value="{{.}}" checked> {{.}}</label></div>
 {{end}}
+{{if .PreviouslyGranted}}
+<p>You previously granted this app access to (uncheck to revoke):</p>
+{{range .PreviouslyGranted}}
+<div><label><input type="checkbox" name="keep" value="{{.}}" checked> {{.}}</label></div>
+{{end}}
+{{end}}
 <button type="submit" name="decision" value="allow" style="margin-top:1rem">Allow</button>
 <button type="submit" name="decision" value="deny">Deny</button>
 </form>

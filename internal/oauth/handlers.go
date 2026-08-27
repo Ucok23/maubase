@@ -81,7 +81,18 @@ func (s *Server) handleAuthorizePOST(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		granted := grantedScopes(r.PostForm["granted"], ar.GetRequestedScopes())
-		if err := s.saveConsent(ctx, user.ID, ar.GetClient().GetID(), granted); err != nil {
+		// Whatever the user left checked among their previously-granted,
+		// not-currently-requested scopes (the "You previously granted..."
+		// section renderConsent shows) — anything they unchecked there is
+		// dropped from what's persisted, i.e. revoked. Filtered against
+		// the same existing-minus-requested set the consent screen was
+		// built from, not just isAllowedScope, so a forged extra "keep"
+		// value can't resurrect a scope the user never actually had.
+		existing, _ := s.getConsent(ctx, user.ID, ar.GetClient().GetID())
+		keepable := scopesNotIn(existing, ar.GetRequestedScopes())
+		kept := grantedScopes(r.PostForm["keep"], fosite.Arguments(keepable))
+		persisted := append(append([]string{}, granted...), kept...)
+		if err := s.saveConsent(ctx, user.ID, ar.GetClient().GetID(), persisted); err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
@@ -102,7 +113,26 @@ func (s *Server) continueAuthorize(w http.ResponseWriter, r *http.Request, ar fo
 		s.finishAuthorize(w, r, ar, user, requested)
 		return
 	}
-	s.renderConsent(w, ar, r.URL.RawQuery, user, requested)
+	s.renderConsent(w, ar, r.URL.RawQuery, user, requested, scopesNotIn(existing, requested))
+}
+
+// scopesNotIn returns the scopes in have that aren't also in exclude —
+// used to find the subset of a user's existing consent for a client that
+// isn't part of the current request, so the consent screen can show it
+// (and let the user revoke it) separately from what's being requested
+// right now.
+func scopesNotIn(have []string, exclude fosite.Arguments) []string {
+	excludeSet := make(map[string]bool, len(exclude))
+	for _, sc := range exclude {
+		excludeSet[sc] = true
+	}
+	var out []string
+	for _, sc := range have {
+		if !excludeSet[sc] {
+			out = append(out, sc)
+		}
+	}
+	return out
 }
 
 func (s *Server) finishAuthorize(w http.ResponseWriter, r *http.Request, ar fosite.AuthorizeRequester, user *auth.User, scopes []string) {
@@ -234,19 +264,30 @@ func (s *Server) renderLogin(w http.ResponseWriter, ar fosite.AuthorizeRequester
 }
 
 type consentView struct {
-	ClientName   string
-	Email        string
-	OAuthRequest string
-	Scopes       []string
+	ClientName        string
+	Email             string
+	OAuthRequest      string
+	Scopes            []string
+	PreviouslyGranted []string
 }
 
-func (s *Server) renderConsent(w http.ResponseWriter, ar fosite.AuthorizeRequester, rawQuery string, user *auth.User, requested fosite.Arguments) {
+// renderConsent shows both what this request is asking for (requested —
+// always listed, checked) and, separately, any scope the user granted
+// this client in the past but isn't part of this request (previouslyGranted
+// — also listed, checked, but this is the control that lets a user
+// actually revoke a standing grant: unchecking one here and submitting
+// "Allow" drops it from what's persisted, via saveConsent below. Before
+// this, previously-granted scopes weren't shown at all, so there was
+// nothing to uncheck — saveConsent's old union-with-existing logic kept
+// them regardless of anything the form could express.
+func (s *Server) renderConsent(w http.ResponseWriter, ar fosite.AuthorizeRequester, rawQuery string, user *auth.User, requested, previouslyGranted fosite.Arguments) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = consentTpl.Execute(w, consentView{
-		ClientName:   ar.GetClient().GetID(),
-		Email:        user.Email,
-		OAuthRequest: rawQuery,
-		Scopes:       []string(requested),
+		ClientName:        ar.GetClient().GetID(),
+		Email:             user.Email,
+		OAuthRequest:      rawQuery,
+		Scopes:            []string(requested),
+		PreviouslyGranted: []string(previouslyGranted),
 	})
 }
 
@@ -265,22 +306,24 @@ func (s *Server) getConsent(ctx context.Context, userID, clientID string) ([]str
 	return scopes, nil
 }
 
+// saveConsent replaces this user's consent for clientID with exactly
+// scopes — the caller is responsible for computing the full set that
+// should end up persisted (typically the current request's granted
+// scopes plus whichever previously-granted ones the user left checked;
+// see the "consent" case in handleAuthorizePOST). This deliberately
+// isn't a union with whatever was there before: a union would make
+// revocation impossible from this screen no matter what the user
+// unchecked, which is exactly the bug this replaced.
 func (s *Server) saveConsent(ctx context.Context, userID, clientID string, scopes []string) error {
-	// Union with any existing consent so re-authorizing with a broader
-	// scope request doesn't drop previously granted scopes.
-	existing, _ := s.getConsent(ctx, userID, clientID)
-	set := make(map[string]bool, len(existing)+len(scopes))
-	for _, s := range existing {
-		set[s] = true
+	deduped := make(map[string]bool, len(scopes))
+	for _, sc := range scopes {
+		deduped[sc] = true
 	}
-	for _, s := range scopes {
-		set[s] = true
+	out := make([]string, 0, len(deduped))
+	for sc := range deduped {
+		out = append(out, sc)
 	}
-	merged := make([]string, 0, len(set))
-	for s := range set {
-		merged = append(merged, s)
-	}
-	scopesJSON, err := json.Marshal(merged)
+	scopesJSON, err := json.Marshal(out)
 	if err != nil {
 		return err
 	}

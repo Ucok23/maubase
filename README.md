@@ -37,6 +37,16 @@ What's here now (v1, step 1 of the roadmap):
     revokes the entire downstream grant chain — the standard compromise
     response for a stolen refresh token.
   - Revocation: `POST /oauth/revoke` (RFC 7009)
+  - Consent management: `GET /api/auth/me/consents` lists every
+    third-party client a signed-in user has a standing scope grant for;
+    `DELETE /api/auth/me/consents/{client_id}` revokes one outright —
+    deletes the consent record and every outstanding token issued to
+    that client — without touching the account or any other client's
+    grant. The consent screen itself also shows previously-granted
+    scopes alongside newly-requested ones on re-authorization, and
+    honors unchecking one as revoking it, rather than always keeping
+    every scope a client was ever granted (see spec/oauth-authorize-
+    and-consent.md AUTHZ-11).
   - Discovery: `GET /.well-known/oauth-authorization-server` (RFC 8414),
     `GET /.well-known/jwks.json`
   - Access tokens are RS256 JWTs signed with a persisted, rotatable

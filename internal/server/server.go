@@ -115,6 +115,8 @@ func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.
 			r.Get("/me", s.handleMe)
 			r.Get("/me/export", s.handleExportAccount)
 			r.Delete("/me", s.handleDeleteAccount)
+			r.Get("/me/consents", s.handleListConsents)
+			r.Delete("/me/consents/{client_id}", s.handleRevokeConsent)
 		})
 	})
 

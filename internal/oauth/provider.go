@@ -8,6 +8,7 @@ package oauth
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -96,4 +97,63 @@ func NewServer(ctx context.Context, db *sql.DB, authSvc *auth.Service, issuer st
 // see internal/server's handleDeleteAccount.
 func (s *Server) RevokeAllForSubject(ctx context.Context, subject string) error {
 	return s.Storage.RevokeForSubject(ctx, subject)
+}
+
+// ConsentGrant is one client a user has an active scope grant for — the
+// shape GET /api/auth/me/consents lists, so a user can actually see what
+// they've authorized (and, via RevokeConsent, undo it) without deleting
+// their whole account, the only escape hatch that existed before.
+type ConsentGrant struct {
+	ClientID   string   `json:"client_id"`
+	ClientName string   `json:"client_name"`
+	Scopes     []string `json:"scopes"`
+}
+
+// ListConsents returns every client subject has a standing consent
+// record for, newest-registered client first isn't meaningful here since
+// consents don't carry their own timestamp beyond created_at on the
+// row — ordered by client_name for a stable, human-friendly listing.
+func (s *Server) ListConsents(ctx context.Context, subject string) ([]ConsentGrant, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.client_id, cl.client_name, c.scopes
+		FROM oauth_consents c
+		JOIN oauth_clients cl ON cl.id = c.client_id
+		WHERE c.user_id = ?
+		ORDER BY cl.client_name, c.client_id
+	`, subject)
+	if err != nil {
+		return nil, fmt.Errorf("list consents: %w", err)
+	}
+	defer rows.Close()
+
+	out := []ConsentGrant{}
+	for rows.Next() {
+		var g ConsentGrant
+		var scopesJSON string
+		if err := rows.Scan(&g.ClientID, &g.ClientName, &scopesJSON); err != nil {
+			return nil, fmt.Errorf("scan consent: %w", err)
+		}
+		if err := json.Unmarshal([]byte(scopesJSON), &g.Scopes); err != nil {
+			return nil, fmt.Errorf("unmarshal consent scopes: %w", err)
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// RevokeConsent is the real "undo" for a single client's access: it
+// deletes the standing consent record (so a future authorize request
+// shows the consent screen again, from a clean slate, rather than
+// silently re-granting via ConsentGrant's row) and revokes every
+// outstanding token already issued to that client on subject's behalf —
+// an unrevoked consent record without live tokens would still be
+// meaningfully "you're still authorized," and live tokens without a
+// consent record would be silently unkillable via this endpoint.
+func (s *Server) RevokeConsent(ctx context.Context, subject, clientID string) error {
+	if _, err := s.db.ExecContext(ctx, `
+		DELETE FROM oauth_consents WHERE user_id = ? AND client_id = ?
+	`, subject, clientID); err != nil {
+		return fmt.Errorf("delete consent: %w", err)
+	}
+	return s.Storage.RevokeForSubjectAndClient(ctx, subject, clientID)
 }
