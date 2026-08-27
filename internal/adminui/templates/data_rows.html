@@ -39,7 +39,10 @@
 {{if .IsPK}}
 <td class="id-cell">{{index $row .Name}}</td>
 {{else}}
-<td><input type="{{inputType .DeclType}}" name="{{.Name}}" value="{{index $row .Name}}"{{if .NotNull}} required{{end}}></td>
+<td>
+<input type="{{inputType .DeclType}}" name="{{.Name}}" value="{{if not (isNull (index $row .Name))}}{{index $row .Name}}{{end}}"{{if .NotNull}} required{{end}}>
+{{if not .NotNull}}<label class="null-toggle"><input type="checkbox" name="{{.Name}}__null" value="1"{{if isNull (index $row .Name)}} checked{{end}}> NULL</label>{{end}}
+</td>
 {{end}}
 {{end}}
 <td class="actions">
