@@ -84,8 +84,21 @@ func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.
 		// target for outright email-bombing a victim, so it deserves the
 		// same throttle at minimum, not a looser one of its own.
 		r.With(s.rateLimitLogin).Post("/forgot-password", s.handleForgotPassword)
-		r.Post("/reset-password", s.handleResetPassword)
-		r.Get("/social/{provider}", s.handleSocialStart)
+		// reset-password's 256-bit token makes brute force impractical
+		// regardless, but throttling it anyway keeps every "guess a
+		// secret" endpoint in this group consistent.
+		r.With(s.rateLimitLogin).Post("/reset-password", s.handleResetPassword)
+		// social-login-start is the more concrete risk of the two: each
+		// attempt does a real outbound HTTP exchange with the upstream
+		// provider, so an unauthenticated inbound endpoint could otherwise
+		// generate unbounded outbound requests — an SSRF-adjacent/DoS-
+		// amplification surface, and the kind of thing that gets a
+		// deployment's own registered OAuth client flagged by the
+		// provider. The callback is left unthrottled: it's driven by a
+		// redirect from the provider itself after a real user completed
+		// that provider's own login, not directly attacker-triggerable at
+		// volume the way the start endpoint is.
+		r.With(s.rateLimitLogin).Get("/social/{provider}", s.handleSocialStart)
 		r.Get("/social/{provider}/callback", s.handleSocialCallback)
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAuth)

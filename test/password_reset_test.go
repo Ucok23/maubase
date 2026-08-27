@@ -338,3 +338,20 @@ func TestPasswordReset_ForgotPasswordIsRateLimited(t *testing.T) {
 		t.Fatalf("attempt over the limit: want 429, got %d", resp.StatusCode)
 	}
 }
+
+func TestPasswordReset_ResetPasswordIsRateLimited(t *testing.T) {
+	// PWRESET-11
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		LoginRateLimit: 2, LoginRateWindow: 60 * time.Second,
+	})
+	for i := 0; i < 2; i++ {
+		resp := resetPassword(t, baseURL, "garbage-token", "brandnewpassword1")
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("attempt %d: want 400 (garbage token, but under the limit), got %d", i+1, resp.StatusCode)
+		}
+	}
+	resp := resetPassword(t, baseURL, "garbage-token", "brandnewpassword1")
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("attempt over the limit: want 429, got %d", resp.StatusCode)
+	}
+}

@@ -78,3 +78,16 @@ then maubase falls back to that account's primary, verified email (a
 second call GitHub's own API requires for this), and account
 creation/linking (SOCIAL-01/02) proceeds using that address, not an
 empty one.
+
+## SOCIAL-07: Starting a social flow is rate-limited
+`GET /api/auth/social/{provider}` shares the same per-IP throttle
+`POST /api/auth/login` does. Unlike a brute-force login guess, each
+attempt here does a real outbound HTTP exchange with the upstream
+provider, so leaving this endpoint unthrottled would let an
+unauthenticated caller generate unbounded outbound requests — an
+SSRF-adjacent/DoS-amplification surface, and the kind of volume that
+gets a deployment's own registered OAuth client flagged by the
+provider. The callback endpoint is unaffected: it's reached only via a
+redirect from the provider itself after a real user completed that
+provider's own login, not something an attacker can drive at volume
+directly.
