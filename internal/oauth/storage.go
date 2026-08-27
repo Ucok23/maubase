@@ -154,20 +154,48 @@ func (s *Storage) CreateRefreshTokenSession(ctx context.Context, signature strin
 	return s.insert(ctx, "oauth_refresh_tokens", signature, r)
 }
 
+// GetRefreshTokenSession distinguishes a token that never existed
+// (fosite.ErrNotFound) from one that existed but was already rotated away
+// (fosite.ErrInactiveToken, alongside the hydrated requester) — the same
+// active-flag pattern GetAuthorizeCodeSession uses. That distinction is
+// what lets Fosite's refresh-grant handler recognize token reuse (a
+// rotated-away refresh token being replayed, e.g. because it was stolen)
+// and respond by revoking the entire grant chain, instead of the reuse
+// looking identical to an unrelated bad request.
 func (s *Storage) GetRefreshTokenSession(ctx context.Context, signature string, session fosite.Session) (fosite.Requester, error) {
-	return s.getByTable(ctx, "oauth_refresh_tokens", signature, session)
+	var clientID string
+	var reqBytes, sessBytes []byte
+	var active bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT client_id, requester, session, active FROM oauth_refresh_tokens WHERE signature = ?
+	`, signature).Scan(&clientID, &reqBytes, &sessBytes, &active)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fosite.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	requester, err := s.hydrate(ctx, clientID, reqBytes, sessBytes, session)
+	if err != nil {
+		return nil, err
+	}
+	if !active {
+		return requester, fosite.ErrInactiveToken
+	}
+	return requester, nil
 }
 
 func (s *Storage) DeleteRefreshTokenSession(ctx context.Context, signature string) error {
 	return s.deleteByTable(ctx, "oauth_refresh_tokens", "signature", signature)
 }
 
-// RotateRefreshToken revokes the previous refresh token when a client
-// redeems it for a new access/refresh token pair, so a stolen-but-already-
-// used refresh token can't be replayed.
+// RotateRefreshToken marks the previous refresh token inactive (not
+// deleted — see GetRefreshTokenSession) when a client redeems it for a new
+// access/refresh token pair, so a stolen-but-already-used refresh token
+// replayed later is recognized as reuse rather than merely "not found".
 func (s *Storage) RotateRefreshToken(ctx context.Context, requestID string, refreshTokenSignature string) error {
 	_, err := s.db.ExecContext(ctx, `
-		DELETE FROM oauth_refresh_tokens WHERE signature = ? AND request_id = ?
+		UPDATE oauth_refresh_tokens SET active = 0 WHERE signature = ? AND request_id = ?
 	`, refreshTokenSignature, requestID)
 	return err
 }
