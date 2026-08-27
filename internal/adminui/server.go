@@ -133,7 +133,12 @@ func (s *Server) rateLimitLogin(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if ok, retryAfter := s.loginLimiter.Allow(clientIP(r)); !ok {
+		key := clientIP(r)
+		if ok, retryAfter := s.loginLimiter.Allow(key); !ok {
+			// See internal/server's identical reasoning on its own
+			// rateLimitOwnerLogin: without this, a throttled brute-force
+			// attempt against this exact login page left zero audit trail.
+			s.audit.RecordLogged(r.Context(), audit.EventLoginRateLimited, audit.Actor{}, audit.Target{}, map[string]any{"client_ip": key})
 			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())+1))
 			w.WriteHeader(http.StatusTooManyRequests)
 			render(w, "login", map[string]any{"Title": "Sign in", "Error": "too many login attempts — try again shortly"})

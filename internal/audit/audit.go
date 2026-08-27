@@ -25,8 +25,17 @@ import (
 // rather than free-form strings, so a typo in a caller can't silently
 // create an unrecognized event.
 const (
-	EventLogin               = "login"
-	EventLoginFailed         = "login_failed"
+	EventLogin       = "login"
+	EventLoginFailed = "login_failed"
+	// EventLoginRateLimited fires when the owner-plane login throttle
+	// itself rejects a request (429), before any credential is even
+	// checked — distinct from EventLoginFailed, which requires a
+	// credential that was actually looked up and found wanting. Without
+	// this, a sustained brute-force attempt that gets throttled produces
+	// zero audit trail beyond the handful of attempts that slipped in
+	// under the limit, the exact scenario an incident review most wants
+	// visibility into.
+	EventLoginRateLimited    = "login_rate_limited"
 	EventLogout              = "logout"
 	EventOwnerCreate         = "owner_create"
 	EventOwnerDelete         = "owner_delete"
