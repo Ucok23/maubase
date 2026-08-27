@@ -248,3 +248,55 @@ func TestMaintenance_OAuthAuthorizeLoginRateLimitRejectsExcessAttempts(t *testin
 		t.Fatalf("attempt beyond limit: want 429, got %d: %s", resp.StatusCode, bodyString(t, resp))
 	}
 }
+
+func TestMaintenance_CustomerAndOwnerLoginRateLimitsAreIndependent(t *testing.T) {
+	// MAINT-06
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail:    bootstrapEmail,
+		BootstrapOwnerPassword: bootstrapPassword,
+		LoginRateLimit:         2,
+		LoginRateWindow:        time.Minute,
+	})
+	signUp(t, newClient(t), baseURL, "maint06@example.com", "correcthorse")
+
+	customerLogin := func() *http.Response {
+		return postJSON(t, newClient(t), baseURL+"/api/auth/login", map[string]string{
+			"email": "maint06@example.com", "password": "wrong-password",
+		})
+	}
+
+	// Exhaust the customer-plane budget.
+	for i := range 2 {
+		resp := customerLogin()
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("customer attempt %d: want 401 (within limit), got %d", i+1, resp.StatusCode)
+		}
+	}
+	exhausted := customerLogin()
+	exhausted.Body.Close()
+	if exhausted.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("customer attempt beyond limit: want 429, got %d", exhausted.StatusCode)
+	}
+
+	// The owner plane's own budget is still fresh — unaffected by the
+	// customer-plane exhaustion above, even though every request here
+	// comes from the same test process (same client IP).
+	for i := range 2 {
+		resp := ownerLogin(t, newClient(t), baseURL, bootstrapEmail, "wrong-password")
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("owner attempt %d: want 401 (owner budget untouched by customer exhaustion), got %d", i+1, resp.StatusCode)
+		}
+	}
+
+	// Exhausting the owner-plane budget in turn doesn't touch the
+	// customer plane's (already-exhausted, but this proves independence
+	// in both directions, not just one).
+	ownerLogin(t, newClient(t), baseURL, bootstrapEmail, "wrong-password").Body.Close()
+	stillExhausted := customerLogin()
+	stillExhausted.Body.Close()
+	if stillExhausted.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("customer plane: want still 429 (unaffected either way), got %d", stillExhausted.StatusCode)
+	}
+}
