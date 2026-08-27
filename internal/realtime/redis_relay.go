@@ -14,6 +14,15 @@ import (
 // so a subscriber connected to one instance never saw a write that
 // landed on another). Every maubase process sharing the same Redis
 // instance and channel name sees every other process's events.
+//
+// Known limitation (spec/realtime.md's "cross-process policy-change
+// skew"): the ownerID gating value travels with the relayed event,
+// computed by whichever process handled the write — a receiving
+// process trusts it as-is, never re-deriving it against its own
+// Registry. A _policies change reloaded on one process but not yet on
+// a sibling can, until that sibling reloads, cause a write it handles
+// to relay a stale gating decision. No cross-process registry
+// invalidation exists today; see spec/realtime.md for the mitigation.
 type RedisRelay struct {
 	client   *redis.Client
 	channel  string
