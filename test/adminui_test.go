@@ -921,6 +921,68 @@ func TestAdminUI_SidebarHidesLinksAboveRole(t *testing.T) {
 	}
 }
 
+func TestAdminUI_HiddenRoutesReject403ForEveryUnderTierRole(t *testing.T) {
+	// ADMINUI-36
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	createOwner(t, owner, baseURL, "adminui-hidden-viewer@example.com", "viewerpassword1", "viewer")
+	createOwner(t, owner, baseURL, "adminui-hidden-dev@example.com", "devpassword1", "developer")
+	createOwner(t, owner, baseURL, "adminui-hidden-admin@example.com", "adminpassword1", "admin")
+	// A throwaway target for the owner-delete action — this route's role
+	// check runs before the handler ever looks up the id, so a
+	// nonexistent one still proves the 403 boundary.
+	bogusID := "00000000-0000-0000-0000-000000000000"
+
+	type roleAccount struct{ role, email, password string }
+	viewer := roleAccount{"viewer", "adminui-hidden-viewer@example.com", "viewerpassword1"}
+	developer := roleAccount{"developer", "adminui-hidden-dev@example.com", "devpassword1"}
+	admin := roleAccount{"admin", "adminui-hidden-admin@example.com", "adminpassword1"}
+
+	type routeCase struct {
+		name        string
+		method      string
+		path        string
+		underTier   []roleAccount // every role below this route's minimum
+		formForPost url.Values
+	}
+	cases := []routeCase{
+		{"owners page", http.MethodGet, "/admin/ui/owners", []roleAccount{viewer, developer}, nil},
+		{"audit log page", http.MethodGet, "/admin/ui/audit-log", []roleAccount{viewer, developer}, nil},
+		{"maintenance page", http.MethodGet, "/admin/ui/maintenance", []roleAccount{viewer, developer}, nil},
+		{"purge sessions", http.MethodPost, "/admin/ui/maintenance/purge-sessions", []roleAccount{viewer, developer}, url.Values{}},
+		{"create owner", http.MethodPost, "/admin/ui/owners", []roleAccount{viewer, developer, admin},
+			url.Values{"email": {"whoever@example.com"}, "password": {"correcthorse"}, "role": {"viewer"}}},
+		{"delete owner", http.MethodPost, "/admin/ui/owners/" + bogusID + "/delete", []roleAccount{viewer, developer, admin}, url.Values{}},
+		{"sql studio page", http.MethodGet, "/admin/ui/sql", []roleAccount{viewer, developer, admin}, nil},
+		{"sql studio run", http.MethodPost, "/admin/ui/sql", []roleAccount{viewer, developer, admin}, url.Values{"query": {"select 1"}}},
+	}
+
+	for _, c := range cases {
+		for _, acct := range c.underTier {
+			client := newClient(t)
+			adminUILogin(t, client, baseURL, acct.email, acct.password)
+
+			var resp *http.Response
+			var err error
+			switch c.method {
+			case http.MethodGet:
+				resp = doGetNoRedirect(t, client, baseURL+c.path)
+			case http.MethodPost:
+				resp, err = client.PostForm(baseURL+c.path, c.formForPost)
+				if err != nil {
+					t.Fatalf("%s %s as %s: %v", c.method, c.path, acct.role, err)
+				}
+			default:
+				t.Fatalf("unsupported method %s", c.method)
+			}
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("%s %s (%s) as %s: want 403, got %d: %s", c.method, c.path, c.name, acct.role, resp.StatusCode, bodyString(t, resp))
+			}
+		}
+	}
+}
+
 // --- data browser: inline editing, NULL display, sorting -------------------
 
 func TestAdminUI_InlineEditReturnsRowFragmentNotRedirect(t *testing.T) {

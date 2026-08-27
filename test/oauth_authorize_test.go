@@ -189,6 +189,34 @@ func TestOAuthAuthorize_RejectsUnregisteredRedirectURI(t *testing.T) {
 	}
 }
 
+func TestOAuthAuthorize_ConfinedToOwnRegisteredScopes(t *testing.T) {
+	baseURL := testserver.New(t)
+	// Registered with only "profile" — records:write is valid globally
+	// but not something this client declared at registration.
+	clientID := registerPublicClient(t, baseURL, testRedirectURI, "profile")
+	_, challenge := pkcePair(t)
+
+	client := newClient(t)
+	signUp(t, client, baseURL, "scopeconfine@example.com", "correcthorse")
+
+	// AUTHZ-10
+	q := authorizeParams(clientID, testRedirectURI, "profile records:write", "state12345678", challenge)
+	resp, err := client.Get(baseURL + "/oauth/authorize?" + q.Encode())
+	if err != nil {
+		t.Fatalf("GET /oauth/authorize: %v", err)
+	}
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("want a redirect carrying the error, got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+	loc := locationQuery(t, resp)
+	if loc.Get("error") != "invalid_scope" {
+		t.Fatalf("want error=invalid_scope, got %v", loc)
+	}
+	if loc.Get("code") != "" {
+		t.Fatalf("want no code issued, got %v", loc)
+	}
+}
+
 func TestOAuthAuthorize_RejectsWeakState(t *testing.T) {
 	baseURL := testserver.New(t)
 	clientID := registerPublicClient(t, baseURL, testRedirectURI, "profile")

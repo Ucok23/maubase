@@ -398,3 +398,18 @@ A very long field value (near RFC 5321's ~254-character email limit, or
 several kilobytes for a data-browser value) also renders without an
 error and without breaking the page layout badly enough to hide its
 action buttons.
+
+## ADMINUI-36: Every hidden route rejects direct navigation, for every under-tier role
+Given every route ADMINUI-31 hides a link to for some role — the
+admin+ pages (`/admin/ui/owners`, `/admin/ui/audit-log`,
+`/admin/ui/maintenance` and its purge action) and the owner-only pages
+and actions (creating/deleting an owner, SQL Studio's page and its run
+action),
+when a signed-in owner below that route's minimum role requests it
+directly (bypassing the UI — a stale bookmark, a hand-typed URL, a
+raw HTTP client),
+then the response is `403` for every one of those (route, role) pairs,
+not just the one combination ADMINUI-31 happens to check on its way to
+asserting the sidebar's own contents — including the owner-only delete
+action specifically, which no other test exercises via direct
+navigation (only its create counterpart, ADMINUI-07, does).
