@@ -1193,6 +1193,62 @@ func TestAdminUI_HostileMarkupIsEscapedNotExecuted(t *testing.T) {
 	}
 }
 
+func TestAdminUI_ConcurrentEditsSilentlyLastWriteWins(t *testing.T) {
+	// ADMINUI-39
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		Schema: []string{notesSchema},
+	})
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	if _, err := owner.PostForm(baseURL+"/admin/ui/data/notes", url.Values{
+		"title": {"original"}, "body": {"x"}, "owner_id": {"user-a"},
+	}); err != nil {
+		t.Fatalf("create row: %v", err)
+	}
+	rowsBody := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes"))
+	id := idFromRowHTML(t, rowsBody, "original")
+
+	// Two developer+ owners, each having loaded the same pre-edit row,
+	// now save in sequence — neither aware of the other's edit.
+	editorA := newClient(t)
+	adminUILogin(t, editorA, baseURL, bootstrapEmail, bootstrapPassword)
+	editorB := newClient(t)
+	adminUILogin(t, editorB, baseURL, bootstrapEmail, bootstrapPassword)
+
+	respA, err := editorA.PostForm(baseURL+"/admin/ui/data/notes/"+id, url.Values{
+		"title": {"edited by A"}, "body": {"x"}, "owner_id": {"user-a"},
+	})
+	if err != nil {
+		t.Fatalf("editor A's edit: %v", err)
+	}
+	if respA.StatusCode != http.StatusSeeOther {
+		t.Fatalf("editor A's edit: want 303, got %d", respA.StatusCode)
+	}
+
+	respB, err := editorB.PostForm(baseURL+"/admin/ui/data/notes/"+id, url.Values{
+		"title": {"edited by B"}, "body": {"x"}, "owner_id": {"user-a"},
+	})
+	if err != nil {
+		t.Fatalf("editor B's edit: %v", err)
+	}
+	// The second edit succeeds unconditionally — no conflict response of
+	// any kind, exactly as if it were the only edit made.
+	if respB.StatusCode != http.StatusSeeOther {
+		t.Fatalf("editor B's edit: want 303 (no conflict detection exists), got %d", respB.StatusCode)
+	}
+
+	// The row now holds B's values, silently overwriting A's.
+	finalBody := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes"))
+	if strings.Contains(finalBody, "edited by A") {
+		t.Fatalf("want A's edit silently overwritten, but it's still present: %s", finalBody)
+	}
+	if !strings.Contains(finalBody, "edited by B") {
+		t.Fatalf("want B's edit (the last write) to have won: %s", finalBody)
+	}
+}
+
 // idFromRowHTML extracts the id chi assigned a newly created row from its
 // id="row-{id}" attribute in a rendered data_rows page, by finding the
 // <tr> whose text contains marker.

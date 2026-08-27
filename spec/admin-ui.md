@@ -413,3 +413,21 @@ not just the one combination ADMINUI-31 happens to check on its way to
 asserting the sidebar's own contents — including the owner-only delete
 action specifically, which no other test exercises via direct
 navigation (only its create counterpart, ADMINUI-07, does).
+
+## ADMINUI-39: Concurrent edits to the same row silently last-write-wins
+Given a row two developer+ owners are both editing (support work on the
+same customer's data, say — the data browser has no lock or lease
+mechanism to stop this), each having loaded the edit form before the
+other saves,
+when the first submits their edit, and then the second submits theirs
+(built off the same pre-edit values, unaware of the first's change),
+then the second submission succeeds unconditionally — `200` for an
+htmx inline edit or the usual redirect for the full-page form, exactly
+as if it were the only edit made — and the row ends up holding the
+second owner's values, silently overwriting the first's, with no
+error, no conflict warning, and nothing in the audit log distinguishing
+this from an uncontested edit. `AdminUpdateRow` writes a bare
+`UPDATE ... WHERE id = ?`; this is deliberate v1 behavior, not a bug —
+optimistic concurrency (a version or `updated_at` check) is future
+scope if two-editors-at-once support work turns out to be common
+enough to need it.
