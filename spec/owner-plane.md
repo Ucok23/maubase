@@ -229,3 +229,18 @@ since it was written, but no scenario anywhere ever actually exercised
 this for the owner plane specifically — the only expiry-adjacent test
 checks that a *customer* session survives a purge unaffected, never the
 owner-plane rejection path itself.
+
+## OWNR-25: Deleting a nonexistent owner is a clean 404, not a leaked internal error
+Given an id that doesn't correspond to any owner-plane account (never
+existed, or was already deleted by an earlier request),
+when a signed-in owner calls `DELETE /admin/owners/{id}`,
+then the response is `404` with a plain "owner not found" message —
+never a `500` with the underlying SQL error string leaked into the
+response body. `GetOwner`/`DeleteOwner`'s row lookup returns
+`ErrOwnerNotFound` for this case specifically, which
+`writeOwnerAuthError` maps to `404`; before this, `sql.ErrNoRows` was
+wrapped as a generic `fmt.Errorf("lookup owner: %w", err)` with no
+`errors.Is` case matching it, so it fell through the same handler's
+default and surfaced as `{"error":"lookup owner: sql: no rows in
+result set"}` — a raw internal error string leaked to the client for
+the mundane, everyday case of deleting an id that's already gone.

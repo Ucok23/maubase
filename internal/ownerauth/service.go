@@ -160,6 +160,9 @@ func (s *Service) GetOwner(ctx context.Context, id string) (*Owner, error) {
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, email, role, created_at, updated_at FROM owner_users WHERE id = ?
 	`, id).Scan(&o.ID, &o.Email, &role, &o.CreatedAt, &o.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrOwnerNotFound
+	}
 	if err != nil {
 		return nil, fmt.Errorf("lookup owner: %w", err)
 	}
@@ -216,6 +219,9 @@ func (s *Service) DeleteOwner(ctx context.Context, id string) (*Owner, error) {
 	err = tx.QueryRowContext(ctx, `
 		SELECT id, email, role, created_at, updated_at FROM owner_users WHERE id = ?
 	`, id).Scan(&target.ID, &target.Email, &role, &target.CreatedAt, &target.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrOwnerNotFound
+	}
 	if err != nil {
 		return nil, fmt.Errorf("lookup owner: %w", err)
 	}
