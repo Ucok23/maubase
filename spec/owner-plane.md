@@ -229,3 +229,14 @@ since it was written, but no scenario anywhere ever actually exercised
 this for the owner plane specifically — the only expiry-adjacent test
 checks that a *customer* session survives a purge unaffected, never the
 owner-plane rejection path itself.
+
+## OWNR-26: Creating an owner account with an invalid role string is rejected
+Given a signed-in `owner`-role account,
+when they `POST /admin/owners` with `role: "superadmin"` (anything
+outside the closed `viewer`/`developer`/`admin`/`owner` vocabulary,
+including an empty string),
+then the response is `400` with `ErrInvalidRole`'s message, and no
+account is created. `Role.IsValid()`/`ErrInvalidRole` exist specifically
+for this, and `writeOwnerAuthError` already maps `ErrInvalidRole` to
+`400` — this was true by construction but never actually exercised on
+either the JSON or HTML admin-ui surface.
