@@ -239,6 +239,21 @@ isn't one of the collection's actual columns is ignored rather than
 erroring, falling back to the collection's default order (its primary
 key).
 
+## ADMINUI-40: Pagination has a well-defined boundary, even when sorting by a non-unique column
+Given a collection (or the users list) with more rows than fit on one
+page,
+when a viewer+ owner pages through it via `limit`/`offset` (the "Older →"
+/ "← Newer" links, or the equivalent manual query string) — including
+while sorted by a column whose values repeat across many rows, per
+ADMINUI-33 — then each row appears on exactly one page: the row
+immediately after a page's last one is the very next page's first,
+never repeated and never skipped, for every page boundary the listing
+has. `AdminListRows` orders by the requested sort column plus the
+primary key as an ascending tie-break whenever they differ (`ORDER BY
+{sort}, {primary key}`, mirroring how `ListUsers` already orders by
+`created_at DESC, id DESC`) precisely so that ties in the sort column
+don't leave the boundary between two pages undefined.
+
 ## ADMINUI-14: A viewer-role owner can read but not write
 Given the data browser,
 when a `viewer`-role owner visits it,
