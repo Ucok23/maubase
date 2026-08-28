@@ -44,6 +44,16 @@ type Server struct {
 	// otherwise avoids (see internal/adminui.Server's own separate
 	// limiter instance, for the same reason).
 	registerLimiter *ratelimit.Limiter
+	// ownerLoginLimiter is POST /admin/auth/login's own bucket, separate
+	// from loginLimiter: without this, a client hammering the
+	// customer-plane /api/auth/login or /forgot-password from some IP
+	// (a shared office/NAT address an admin also happens to use, say)
+	// exhausted the very budget an admin needed for /admin/auth/login,
+	// and vice versa — an incident responder could be locked out of the
+	// owner plane by unrelated customer-plane traffic. Matches
+	// internal/adminui.Server's own separate limiter for the HTML login
+	// page, which already got this right.
+	ownerLoginLimiter *ratelimit.Limiter
 
 	email            email.Sender
 	passwordResetURL string
@@ -72,6 +82,7 @@ func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.
 		auth: authSvc, oauth: oauthSvc, ownerAuth: ownerAuthSvc, restapi: restapiSvc, storage: storageSvc, realtime: realtimeSvc, adminui: adminuiSvc, audit: auditLog,
 		loginLimiter:        ratelimit.New(loginRateLimit, loginRateWindow),
 		registerLimiter:     ratelimit.New(loginRateLimit, loginRateWindow),
+		ownerLoginLimiter:   ratelimit.New(loginRateLimit, loginRateWindow),
 		email:               emailSender,
 		passwordResetURL:    passwordResetURL,
 		socialProviders:     socialProviders,
@@ -168,7 +179,9 @@ func New(authSvc *auth.Service, oauthSvc *oauth.Server, ownerAuthSvc *ownerauth.
 	// cookie/session/table from the customer plane above and the OAuth
 	// layer — see internal/ownerauth's package doc.
 	r.Route("/admin/auth", func(r chi.Router) {
-		r.With(s.rateLimitLogin).Post("/login", s.handleOwnerLogin)
+		// Its own limiter, not loginLimiter's shared budget — see
+		// ownerLoginLimiter's doc comment.
+		r.With(s.rateLimitOwnerLogin).Post("/login", s.handleOwnerLogin)
 		r.Post("/logout", s.handleOwnerLogout)
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireOwnerRole(ownerauth.RoleViewer))
@@ -226,6 +239,12 @@ func (s *Server) rateLimitLogin(next http.Handler) http.Handler {
 // isn't just rateLimitLogin again.
 func (s *Server) rateLimitRegister(next http.Handler) http.Handler {
 	return rateLimitMiddleware(s.registerLimiter, "too many registration attempts", next)
+}
+
+// rateLimitOwnerLogin throttles POST /admin/auth/login per client IP, via
+// its own limiter instance — see ownerLoginLimiter's doc comment.
+func (s *Server) rateLimitOwnerLogin(next http.Handler) http.Handler {
+	return rateLimitMiddleware(s.ownerLoginLimiter, "too many login attempts", next)
 }
 
 func rateLimitMiddleware(limiter *ratelimit.Limiter, message string, next http.Handler) http.Handler {

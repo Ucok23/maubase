@@ -102,6 +102,28 @@ func TestOwner_AnonymousRejected(t *testing.T) {
 	}
 }
 
+func TestOwner_EmailMatchingIsCaseInsensitive(t *testing.T) {
+	// OWNR-20
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	first := createOwner(t, owner, baseURL, "Admin@Example.com", "correcthorse", "admin")
+	if first.StatusCode != http.StatusCreated {
+		t.Fatalf("setup: want 201, got %d: %s", first.StatusCode, bodyString(t, first))
+	}
+
+	dupe := createOwner(t, owner, baseURL, "admin@example.com", "correcthorse", "admin")
+	if dupe.StatusCode != http.StatusConflict {
+		t.Fatalf("want 409 for a differently-cased duplicate email, got %d: %s", dupe.StatusCode, bodyString(t, dupe))
+	}
+
+	login := ownerLogin(t, newClient(t), baseURL, "ADMIN@EXAMPLE.COM", "correcthorse")
+	if login.StatusCode != http.StatusOK {
+		t.Fatalf("want login with a different casing to succeed, got %d: %s", login.StatusCode, bodyString(t, login))
+	}
+}
+
 func TestOwner_OnlyOwnerCanCreateAccounts(t *testing.T) {
 	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
 

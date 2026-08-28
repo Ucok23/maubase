@@ -38,6 +38,37 @@ func TestIdentity_SignUp(t *testing.T) {
 	}
 }
 
+func TestIdentity_EmailMatchingIsCaseInsensitive(t *testing.T) {
+	// IDNT-14
+	baseURL := testserver.New(t)
+	client := newClient(t)
+
+	resp := postJSON(t, client, baseURL+"/api/auth/signup", map[string]string{
+		"email": "Jane.Doe@Example.com", "password": "correcthorse",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("setup: want 201, got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+
+	// Signing up again with a different casing of the same address is a
+	// duplicate, not a second account.
+	dupe := postJSON(t, newClient(t), baseURL+"/api/auth/signup", map[string]string{
+		"email": "jane.doe@example.com", "password": "anotherpassword",
+	})
+	if dupe.StatusCode != http.StatusConflict {
+		t.Fatalf("want 409 for a differently-cased duplicate email, got %d: %s", dupe.StatusCode, bodyString(t, dupe))
+	}
+
+	// Logging in with a different casing than what was typed at signup
+	// still works.
+	login := postJSON(t, newClient(t), baseURL+"/api/auth/login", map[string]string{
+		"email": "JANE.DOE@EXAMPLE.COM", "password": "correcthorse",
+	})
+	if login.StatusCode != http.StatusOK {
+		t.Fatalf("want login with a different casing to succeed, got %d: %s", login.StatusCode, bodyString(t, login))
+	}
+}
+
 func TestIdentity_SignUpWeakPassword(t *testing.T) {
 	baseURL := testserver.New(t)
 	client := newClient(t)

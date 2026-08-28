@@ -2,11 +2,14 @@ package e2e_test
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"testing"
 
+	"maubase/internal/storage"
 	"maubase/internal/testserver"
 )
 
@@ -277,4 +280,99 @@ func doDeleteWithClient(t *testing.T, client *http.Client, url string) (*http.Re
 		return nil, err
 	}
 	return client.Do(req)
+}
+
+// failingBackend wraps a real storage.Backend and makes Delete fail for
+// exactly one key (failKey, mutable after construction so a test can
+// upload files first — getting real, server-generated ids — before
+// deciding which one to fail) while every other operation, and Delete
+// for every other key, passes straight through.
+type failingBackend struct {
+	inner   storage.Backend
+	failKey string
+}
+
+func (b *failingBackend) Put(ctx context.Context, key string, r io.Reader) (int64, error) {
+	return b.inner.Put(ctx, key, r)
+}
+func (b *failingBackend) Open(ctx context.Context, key string) (io.ReadCloser, error) {
+	return b.inner.Open(ctx, key)
+}
+func (b *failingBackend) Delete(ctx context.Context, key string) error {
+	if key == b.failKey {
+		return fmt.Errorf("simulated delete failure for %s", key)
+	}
+	return b.inner.Delete(ctx, key)
+}
+
+// TestStorage_PartialDeleteOwnedFailureLeavesConsistentState is STOR-13:
+// given 3 uploaded files where the 2nd's byte deletion fails, DeleteOwned
+// must leave the 1st (processed before the failure, in upload order —
+// see DeleteOwned's ORDER BY) fully cleaned, the 2nd's metadata still
+// present (so it's discoverable and retryable, not orphaned pointing at
+// bytes that silently vanished), and the 3rd (never reached) completely
+// untouched. Before this, a bulk "delete all bytes in a loop, then bulk-
+// delete all metadata at the end" ordering meant a failure here left
+// every file's metadata in place regardless of which bytes were already
+// gone.
+func TestStorage_PartialDeleteOwnedFailureLeavesConsistentState(t *testing.T) {
+	inner, err := storage.NewLocalBackend(t.TempDir())
+	if err != nil {
+		t.Fatalf("init local backend: %v", err)
+	}
+	fake := &failingBackend{inner: inner}
+	baseURL := testserver.NewCustom(t, testserver.Options{StorageBackend: fake})
+
+	client := newClient(t)
+	signUp(t, client, baseURL, "partial-delete@example.com", "correcthorse")
+	clientID := registerPublicClient(t, baseURL, testRedirectURI, "files:read files:write")
+	tok := authorizeAndGetToken(t, client, baseURL, clientID, testRedirectURI, []string{"files:read", "files:write"})
+	at, _ := tok["access_token"].(string)
+
+	firstID, _ := decodeJSONMap(t, uploadFile(t, baseURL, at, "first.txt", []byte("1")))["id"].(string)
+	secondID, _ := decodeJSONMap(t, uploadFile(t, baseURL, at, "second.txt", []byte("2")))["id"].(string)
+	thirdID, _ := decodeJSONMap(t, uploadFile(t, baseURL, at, "third.txt", []byte("3")))["id"].(string)
+	if firstID == "" || secondID == "" || thirdID == "" {
+		t.Fatalf("setup: want 3 uploaded files with ids, got %q %q %q", firstID, secondID, thirdID)
+	}
+
+	fake.failKey = secondID
+
+	delResp, err := doDeleteWithClient(t, client, baseURL+"/api/auth/me")
+	if err != nil {
+		t.Fatalf("DELETE /api/auth/me: %v", err)
+	}
+	if delResp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("want 500 (the simulated partial failure), got %d: %s", delResp.StatusCode, bodyString(t, delResp))
+	}
+
+	firstGet := doAuthed(t, http.MethodGet, baseURL+"/api/storage/files/"+firstID, at, nil)
+	if firstGet.StatusCode != http.StatusNotFound {
+		t.Fatalf("first file (processed before the failure): want 404 (fully cleaned), got %d", firstGet.StatusCode)
+	}
+
+	secondGet := doAuthed(t, http.MethodGet, baseURL+"/api/storage/files/"+secondID, at, nil)
+	if secondGet.StatusCode != http.StatusOK {
+		t.Fatalf("second file (bytes delete failed): want 200 metadata (still discoverable), got %d", secondGet.StatusCode)
+	}
+	secondContent := doAuthed(t, http.MethodGet, baseURL+"/api/storage/files/"+secondID+"/content", at, nil)
+	if secondContent.StatusCode != http.StatusOK {
+		t.Fatalf("second file content (bytes never actually removed): want 200, got %d", secondContent.StatusCode)
+	}
+
+	thirdGet := doAuthed(t, http.MethodGet, baseURL+"/api/storage/files/"+thirdID, at, nil)
+	if thirdGet.StatusCode != http.StatusOK {
+		t.Fatalf("third file (never reached): want 200, got %d", thirdGet.StatusCode)
+	}
+
+	// A retry, once the transient failure clears, converges to fully
+	// erased instead of leaving anything orphaned forever.
+	fake.failKey = ""
+	retryResp, err := doDeleteWithClient(t, client, baseURL+"/api/auth/me")
+	if err != nil {
+		t.Fatalf("retry DELETE /api/auth/me: %v", err)
+	}
+	if retryResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("retry: want 204, got %d: %s", retryResp.StatusCode, bodyString(t, retryResp))
+	}
 }

@@ -91,3 +91,44 @@ provider. The callback endpoint is unaffected: it's reached only via a
 redirect from the provider itself after a real user completed that
 provider's own login, not something an attacker can drive at volume
 directly.
+
+## SOCIAL-08: Linking by matching email is case-insensitive
+See `spec/identity.md` IDNT-14: a provider reporting a differently-cased
+email than the one an existing password account signed up with (a
+common normalization difference — providers frequently report lowercase
+regardless of how the account owner originally typed it at signup)
+still links to that existing account under SOCIAL-02, rather than
+missing the match and silently creating a disconnected new one.
+
+## Starting a social flow while already signed in
+
+Completing `google`/`github` with an existing identity-layer session
+already active is a **link a second sign-in method to my account**
+request, not an independent identity resolution — email-matching
+(SOCIAL-02) never enters into it, since the currently-authenticated
+session is what's authoritative here, not whatever a provider happens
+to report.
+
+## SOCIAL-09: A never-before-seen identity links to the current session's account
+Given a signed-in customer session, and a provider identity that has
+never completed this flow before (for *any* account),
+when they complete the `google`/`github` flow while that session is
+still active,
+then no new account is created and no existing different account is
+matched by email — the identity links to the *currently signed-in*
+account directly, and the same session continues (the cookie is
+unchanged, or reissued for the same account). Completing the same
+flow again later, now signed out, signs back into that same account
+(SOCIAL-03) — the second sign-in method is now real.
+
+## SOCIAL-10: An identity already linked elsewhere is refused, not silently swapped
+Given a signed-in customer session for account A, and a provider
+identity already linked to a *different* account B (from a previous
+SOCIAL-01/02/09 flow),
+when they complete that provider's flow while signed in as A,
+then the request is rejected (`409`) and account A's session is left
+completely unchanged — session B is never silently substituted in.
+Before this, the session cookie was unconditionally overwritten with
+whatever account the identity resolved to, so a curious click while
+signed in could switch the browser to an unrelated account with no
+warning at all.

@@ -149,6 +149,28 @@ func TestSocialLogin_MatchingEmailLinksToExistingAccountInsteadOfDuplicating(t *
 	}
 }
 
+func TestSocialLogin_MatchingEmailLinksCaseInsensitively(t *testing.T) {
+	// SOCIAL-08 / spec/identity.md IDNT-14
+	provider := fakeGoogleProvider(t, "google-uid-caseinsensitive", "differently.cased@example.com")
+	baseURL := testserver.NewCustom(t, testserver.Options{SocialProviders: map[string]social.Provider{"google": provider}})
+
+	// The password account signed up with different casing than what the
+	// provider will report.
+	passwordClient := newClient(t)
+	signUp(t, passwordClient, baseURL, "Differently.Cased@Example.com", "originalpassword1")
+	existingMe := decodeJSONMap(t, mustGet(t, passwordClient, baseURL+"/api/auth/me"))
+	existingID, _ := existingMe["id"].(string)
+
+	socialClient := newClient(t)
+	state := startSocialLogin(t, socialClient, baseURL, "google")
+	socialCallback(t, socialClient, baseURL, "google", "fake-code", state)
+
+	socialMe := decodeJSONMap(t, mustGet(t, socialClient, baseURL+"/api/auth/me"))
+	if socialMe["id"] != existingID {
+		t.Fatalf("want the social sign-in to link to the existing account (id %v) despite the casing difference, got a different one: %v", existingID, socialMe)
+	}
+}
+
 func TestSocialLogin_ReturningIdentitySignsIntoTheSameAccountAgain(t *testing.T) {
 	// SOCIAL-03
 	provider := fakeGoogleProvider(t, "google-uid-3", "social03@example.com")
@@ -240,6 +262,75 @@ func TestSocialLogin_StartIsRateLimited(t *testing.T) {
 	resp := doGetNoRedirect(t, client, baseURL+"/api/auth/social/google")
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("attempt over the limit: want 429, got %d", resp.StatusCode)
+	}
+}
+
+func TestSocialLogin_LinksNewIdentityToCurrentSessionWhenSignedIn(t *testing.T) {
+	// SOCIAL-09
+	provider := fakeGoogleProvider(t, "google-uid-link-current", "wont-be-used-for-matching@example.com")
+	baseURL := testserver.NewCustom(t, testserver.Options{SocialProviders: map[string]social.Provider{"google": provider}})
+
+	client := newClient(t)
+	signUp(t, client, baseURL, "account-a@example.com", "originalpassword1")
+	meBefore := decodeJSONMap(t, mustGet(t, client, baseURL+"/api/auth/me"))
+	accountAID, _ := meBefore["id"].(string)
+
+	state := startSocialLogin(t, client, baseURL, "google")
+	resp := socialCallback(t, client, baseURL, "google", "fake-code", state)
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("callback while signed in: want 303, got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+
+	meAfter := decodeJSONMap(t, mustGet(t, client, baseURL+"/api/auth/me"))
+	if meAfter["id"] != accountAID {
+		t.Fatalf("want the same session/account after linking, got %v (was %v)", meAfter["id"], accountAID)
+	}
+
+	// Signed out, the same identity now signs back into account A
+	// directly — the second sign-in method is real, not just accepted
+	// and discarded.
+	returning := newClient(t)
+	state2 := startSocialLogin(t, returning, baseURL, "google")
+	socialCallback(t, returning, baseURL, "google", "fake-code-2", state2)
+	returningMe := decodeJSONMap(t, mustGet(t, returning, baseURL+"/api/auth/me"))
+	if returningMe["id"] != accountAID {
+		t.Fatalf("want the linked identity to sign back into account A, got %v", returningMe["id"])
+	}
+}
+
+func TestSocialLogin_RejectsIdentityAlreadyLinkedElsewhere(t *testing.T) {
+	// SOCIAL-10
+	provider := fakeGoogleProvider(t, "google-uid-linked-elsewhere", "account-b-social@example.com")
+	baseURL := testserver.NewCustom(t, testserver.Options{SocialProviders: map[string]social.Provider{"google": provider}})
+
+	// Link the identity to account B first, via a normal anonymous flow.
+	bClient := newClient(t)
+	stateB := startSocialLogin(t, bClient, baseURL, "google")
+	socialCallback(t, bClient, baseURL, "google", "fake-code-b", stateB)
+	bMe := decodeJSONMap(t, mustGet(t, bClient, baseURL+"/api/auth/me"))
+	accountBID, _ := bMe["id"].(string)
+
+	// Sign in as a completely different account A, then complete the
+	// SAME identity's flow.
+	aClient := newClient(t)
+	signUp(t, aClient, baseURL, "account-a-elsewhere@example.com", "originalpassword1")
+	aMeBefore := decodeJSONMap(t, mustGet(t, aClient, baseURL+"/api/auth/me"))
+	accountAID, _ := aMeBefore["id"].(string)
+	if accountAID == accountBID {
+		t.Fatalf("setup: want two distinct accounts")
+	}
+
+	stateA := startSocialLogin(t, aClient, baseURL, "google")
+	resp := socialCallback(t, aClient, baseURL, "google", "fake-code-a", stateA)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("want 409 for an identity already linked to a different account, got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+
+	// A's session must be completely unaffected — never silently
+	// switched to B.
+	aMeAfter := decodeJSONMap(t, mustGet(t, aClient, baseURL+"/api/auth/me"))
+	if aMeAfter["id"] != accountAID {
+		t.Fatalf("want A's session unchanged after a rejected link attempt, got %v (was %v)", aMeAfter["id"], accountAID)
 	}
 }
 

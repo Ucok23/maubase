@@ -92,3 +92,23 @@ size limit (`MAUBASE_MAX_REQUEST_BODY_KB`),
 then the response is `413`, and the body is never fully buffered/decoded
 into memory first — an authenticated `records:write` caller can't force
 unbounded memory use by sending an arbitrarily large payload.
+
+## REST-VALIDATION-04: A constraint violation is a 400/409, never a 500
+When a create or update body would violate a `NOT NULL`, `CHECK`, or
+foreign-key constraint on the table (an omitted or explicit-`null`
+required field with no default, a value outside a `CHECK`'d range, a
+reference to a row that doesn't exist), or would duplicate a `UNIQUE`
+value,
+then the response names the actual problem — `400` for `NOT NULL`/
+`CHECK`/foreign-key (`409` for `UNIQUE`, unchanged from before) — rather
+than a generic `500` indistinguishable from an actual internal fault.
+This applies to both create and update; update previously had no
+constraint handling at all and always 500'd.
+
+## REST-VALIDATION-05: A non-scalar field value is rejected before it reaches the database
+When a create or update body's value for a real column is a JSON array
+or object rather than a string, number, boolean, or `null`,
+then the response is `400` naming that field — no SQLite column type
+can ever bind a nested structure, so this is caught before the query is
+even built rather than surfacing as an opaque `500` from the database
+driver.

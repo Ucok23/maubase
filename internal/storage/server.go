@@ -243,7 +243,16 @@ func (s *Server) ExportOwned(ctx context.Context, subj string) ([]map[string]any
 // DeleteOwned removes every file (bytes and metadata) subj owns, for
 // account erasure (DELETE /api/auth/me — see spec/identity.md IDNT-10).
 func (s *Server) DeleteOwned(ctx context.Context, subj string) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM files WHERE owner_id = ?`, subj)
+	// Ordered so a partial failure's "everything before the failure point
+	// is fully cleaned, everything from it onward is untouched" guarantee
+	// (see the loop below) is deterministic — upload order — rather than
+	// whatever unspecified order a plain table scan happens to return.
+	// rowid (files.id is a TEXT primary key, so SQLite still maintains a
+	// hidden rowid alongside it) breaks created_at ties in actual
+	// insertion order — CURRENT_TIMESTAMP's one-second resolution means
+	// uploads seconds apart can easily collide, and ordering by id (a
+	// random UUID) on tie would make processing order effectively random.
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM files WHERE owner_id = ? ORDER BY created_at, rowid`, subj)
 	if err != nil {
 		return fmt.Errorf("list owned files: %w", err)
 	}
@@ -261,13 +270,27 @@ func (s *Server) DeleteOwned(ctx context.Context, subj string) error {
 	}
 	rows.Close()
 
+	// Bytes and metadata are deleted per file, immediately after each
+	// other, rather than deleting every file's bytes in a loop and only
+	// then bulk-deleting all the metadata rows at the end. That ordering
+	// meant a failure partway through (a permissions error, or bytes
+	// already gone in a way Delete doesn't tolerate — see its own
+	// os.IsNotExist handling) left every file's metadata row in place
+	// regardless of which ones had already had their bytes removed:
+	// GET /api/storage/files/{id} would still 200 for a file whose bytes
+	// were already gone, with .../content then 500ing instead of 404ing.
+	// Per-file ordering means a failure on file N leaves files before it
+	// fully cleaned (bytes and metadata both gone) and file N onward
+	// untouched (metadata still there, so still discoverable and
+	// retryable) — a retry of the whole call converges correctly instead
+	// of leaving orphaned metadata forever.
 	for _, id := range ids {
 		if err := s.backend.Delete(ctx, id); err != nil {
 			return fmt.Errorf("delete file bytes %s: %w", id, err)
 		}
-	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM files WHERE owner_id = ?`, subj); err != nil {
-		return fmt.Errorf("delete file metadata: %w", err)
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM files WHERE id = ?`, id); err != nil {
+			return fmt.Errorf("delete file metadata %s: %w", id, err)
+		}
 	}
 	return nil
 }

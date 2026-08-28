@@ -63,3 +63,17 @@ when they `DELETE /api/auth/me` (see spec/identity.md IDNT-10),
 then every file they uploaded is gone: an access token that could
 previously read it now gets `404` from both its metadata and content
 routes.
+
+## STOR-13: A partial failure mid-erasure leaves consistent, retryable state
+Given a user with 3 uploaded files, where deleting the 2nd file's bytes
+fails (a permissions error, or bytes already gone in a way that isn't
+tolerated as "already deleted"),
+when their account (or otherwise-triggered erasure) processes these in
+upload order,
+then the 1st file — processed before the failure — is fully erased,
+both bytes and metadata; the 2nd file's metadata is left in place
+(still discoverable via `GET /api/storage/files/{id}`, its bytes still
+intact via `.../content`) rather than orphaned pointing at bytes that
+silently vanished; and the 3rd file, never reached, is completely
+untouched. A retry once the transient failure clears converges to fully
+erased — nothing is left permanently orphaned.

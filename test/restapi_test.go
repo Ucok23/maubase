@@ -391,6 +391,93 @@ func TestRestAPI_RejectsUnknownField(t *testing.T) {
 	}
 }
 
+func TestRestAPI_ConstraintViolationsReturn400Not500(t *testing.T) {
+	// REST-VALIDATION-04
+	baseURL := testserver.NewWithSchema(t, notesSchema, `CREATE TABLE parents (
+		id       TEXT PRIMARY KEY,
+		owner_id TEXT NOT NULL
+	)`, `CREATE TABLE constrained_items (
+		id        TEXT PRIMARY KEY,
+		owner_id  TEXT NOT NULL,
+		quantity  INTEGER CHECK(quantity >= 0),
+		parent_id TEXT REFERENCES parents(id)
+	)`, `CREATE TABLE unique_items (
+		id       TEXT PRIMARY KEY,
+		owner_id TEXT NOT NULL,
+		code     TEXT NOT NULL UNIQUE
+	)`)
+	token := restToken(t, baseURL, "constraint-violation@example.com", []string{"records:read", "records:write"})
+
+	// NOT NULL, via omission, on create: notesSchema's title has no default.
+	createResp := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", token, map[string]any{"body": "no title"})
+	if createResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("create with NOT NULL field omitted: want 400, got %d: %s", createResp.StatusCode, bodyString(t, createResp))
+	}
+
+	// NOT NULL, via explicit null, on update.
+	okNote := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", token, map[string]any{"title": "fine"})
+	noteID := decodeJSONMap(t, okNote)["id"].(string)
+	updateResp := doAuthed(t, http.MethodPatch, baseURL+"/api/data/notes/"+noteID, token, map[string]any{"title": nil})
+	if updateResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("update with NOT NULL field set to null: want 400, got %d: %s", updateResp.StatusCode, bodyString(t, updateResp))
+	}
+
+	// CHECK, on create.
+	checkResp := doAuthed(t, http.MethodPost, baseURL+"/api/data/constrained_items", token, map[string]any{"quantity": -1})
+	if checkResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("create violating CHECK: want 400, got %d: %s", checkResp.StatusCode, bodyString(t, checkResp))
+	}
+
+	// FOREIGN KEY, on create.
+	fkResp := doAuthed(t, http.MethodPost, baseURL+"/api/data/constrained_items", token, map[string]any{
+		"quantity": 1, "parent_id": "no-such-parent",
+	})
+	if fkResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("create violating FOREIGN KEY: want 400, got %d: %s", fkResp.StatusCode, bodyString(t, fkResp))
+	}
+
+	// UNIQUE, on update — this path had no constraint handling at all
+	// before and always 500'd, unlike create's already-existing 409.
+	first := doAuthed(t, http.MethodPost, baseURL+"/api/data/unique_items", token, map[string]any{"code": "taken"})
+	second := doAuthed(t, http.MethodPost, baseURL+"/api/data/unique_items", token, map[string]any{"code": "available"})
+	firstCode, _ := decodeJSONMap(t, first)["code"].(string)
+	secondID, _ := decodeJSONMap(t, second)["id"].(string)
+	if firstCode != "taken" || secondID == "" {
+		t.Fatalf("setup: want two unique_items rows created, got %v / %v", first, second)
+	}
+	uniqueResp := doAuthed(t, http.MethodPatch, baseURL+"/api/data/unique_items/"+secondID, token, map[string]any{"code": "taken"})
+	if uniqueResp.StatusCode != http.StatusConflict {
+		t.Fatalf("update violating UNIQUE: want 409, got %d: %s", uniqueResp.StatusCode, bodyString(t, uniqueResp))
+	}
+
+	// An ordinary update still succeeds cleanly, proving classification
+	// didn't break the happy path.
+	happyUpdate := doAuthed(t, http.MethodPatch, baseURL+"/api/data/notes/"+noteID, token, map[string]any{"title": "renamed"})
+	if happyUpdate.StatusCode != http.StatusOK {
+		t.Fatalf("ordinary update: want 200, got %d: %s", happyUpdate.StatusCode, bodyString(t, happyUpdate))
+	}
+}
+
+func TestRestAPI_NonScalarFieldValueRejected(t *testing.T) {
+	// REST-VALIDATION-05
+	baseURL := testserver.NewWithSchema(t, notesSchema)
+	token := restToken(t, baseURL, "non-scalar-field@example.com", []string{"records:read", "records:write"})
+
+	arrayResp := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", token, map[string]any{
+		"title": "x", "body": []string{"a", "b"},
+	})
+	if arrayResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("array field value: want 400, got %d: %s", arrayResp.StatusCode, bodyString(t, arrayResp))
+	}
+
+	objectResp := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", token, map[string]any{
+		"title": "x", "body": map[string]any{"nested": true},
+	})
+	if objectResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("object field value: want 400, got %d: %s", objectResp.StatusCode, bodyString(t, objectResp))
+	}
+}
+
 func TestRestAPI_PrimaryKeyImmutable(t *testing.T) {
 	baseURL := testserver.NewWithSchema(t, notesSchema)
 	token := restToken(t, baseURL, "immutable-pk@example.com", []string{"records:read", "records:write"})
