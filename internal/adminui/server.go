@@ -849,10 +849,21 @@ func runSQL(ctx context.Context, db *sql.DB, query string) (columns []string, ro
 // formToBody builds a create/update body from r's already-parsed form,
 // including only col's real columns — an unknown form field is simply
 // ignored rather than rejected, since this is an HTML form a human just
-// filled in, not an API contract worth 400ing over a typo.
+// filled in, not an API contract worth 400ing over a typo. A checked
+// "{column}__null" checkbox (the edit forms' NULL toggle — see
+// data_row_edit.html and data_rows.html's inline edit row) overrides
+// that column's text value with a literal nil, regardless of whatever
+// the text input itself holds: an HTML form has no native way to submit
+// NULL, since every text input's "empty" and "absent" both come across
+// as either an empty string or a missing field, never a distinguishable
+// third state.
 func formToBody(r *http.Request, col *restapi.Collection) map[string]any {
 	body := map[string]any{}
 	for _, c := range col.Columns {
+		if r.Form.Has(c.Name + "__null") {
+			body[c.Name] = nil
+			continue
+		}
 		if r.Form.Has(c.Name) {
 			body[c.Name] = r.FormValue(c.Name)
 		}
