@@ -219,11 +219,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	res, err := s.db.ExecContext(r.Context(), query, vals...)
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "already exists"})
-			return
-		}
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		writeWriteError(w, err)
 		return
 	}
 
@@ -317,7 +313,7 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 
 	res, err := s.db.ExecContext(r.Context(), query, vals...)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		writeWriteError(w, err)
 		return
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
@@ -481,6 +477,51 @@ func (s *Server) ownerValueForPK(ctx context.Context, col *Collection, pkValue a
 
 // --- helpers ---------------------------------------------------------------
 
+// writeWriteError classifies a failed INSERT/UPDATE and writes the
+// response a client should see: a constraint violation SQLite itself
+// caught (NOT NULL, CHECK, FOREIGN KEY, UNIQUE) is bad input from the
+// caller — 400 or 409, not a 500 indistinguishable from an actual
+// internal fault. Anything else (a real driver/connection error) still
+// falls through to a generic 500, unchanged from before.
+func writeWriteError(w http.ResponseWriter, err error) {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "UNIQUE constraint failed"):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "already exists"})
+	case strings.Contains(msg, "NOT NULL constraint failed"):
+		field := fieldFromConstraintError(msg, "NOT NULL constraint failed: ")
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("missing required field %q", field)})
+	case strings.Contains(msg, "CHECK constraint failed"):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "a field's value violates a constraint on this table"})
+	case strings.Contains(msg, "FOREIGN KEY constraint failed"):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "a field references a row that doesn't exist"})
+	default:
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
+}
+
+// fieldFromConstraintError pulls the column name out of a SQLite
+// constraint-violation message shaped like
+// "constraint failed: NOT NULL constraint failed: table.column (1299)" —
+// prefix is everything up to and including "NOT NULL constraint failed: ".
+// Falls back to "unknown" if the message doesn't have the expected shape
+// (a driver upgrade changing the wording, say) — a less specific message
+// is fine, mis-parsing into something worse silently isn't.
+func fieldFromConstraintError(msg, prefix string) string {
+	idx := strings.Index(msg, prefix)
+	if idx < 0 {
+		return "unknown"
+	}
+	rest := msg[idx+len(prefix):]
+	if end := strings.IndexAny(rest, " ("); end >= 0 {
+		rest = rest[:end]
+	}
+	if dot := strings.LastIndex(rest, "."); dot >= 0 {
+		rest = rest[dot+1:]
+	}
+	return rest
+}
+
 // collection resolves the {collection} URL param, writing a 404 (and
 // returning ok=false) if it doesn't name an exposed table. This runs
 // after RequireScope, so an unauthenticated or wrongly-scoped request
@@ -564,9 +605,20 @@ func (s *Server) decodeBody(w http.ResponseWriter, r *http.Request, col *Collect
 		// the one value that decodes into "no error, but also no map."
 		body = map[string]any{}
 	}
-	for k := range body {
+	for k, v := range body {
 		if !col.HasColumn(k) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("unknown field %q", k)})
+			return nil, false
+		}
+		// A JSON array or object as a column value has no SQLite column
+		// type it could ever bind to — database/sql's driver rejects it
+		// at Exec time with an "unsupported type" error naming a
+		// positional argument, not a field, which used to surface as an
+		// opaque 500. Caught here instead, before the query is even
+		// built, with a message that actually names the field.
+		switch v.(type) {
+		case map[string]any, []any:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("field %q must be a scalar value (string, number, boolean, or null), not an object/array", k)})
 			return nil, false
 		}
 	}
