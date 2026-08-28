@@ -121,6 +121,29 @@ had happened on process B itself. Without `MAUBASE_REDIS_URL` set
 (`Broker`'s default, `NewBroker`), this does not hold — see the note
 above.
 
+## RT-11: The admin UI's data browser goes through the same fan-out as /api/data/*; SQL Studio doesn't
+Given a subscriber watching a collection,
+when a developer+ owner creates, edits, or deletes a row through
+`/admin/ui/data/{collection}` (the data browser, `internal/restapi`'s
+`AdminCreateRow`/`AdminUpdateRow`/`AdminDeleteRow`),
+then that subscriber receives the same `created`/`updated`/`deleted`
+event RT-02/03/04 describe for a customer-facing write — the "can't be
+bypassed by writing some other way" invariant above applies to the
+admin UI's own writes exactly as it does to account-erasure's cascading
+delete, since a support engineer fixing a customer's row through the
+admin UI is exactly the kind of "some other way" that invariant exists
+for.
+This does **not** extend to SQL Studio's raw `INSERT`/`UPDATE`/`DELETE`
+(`/admin/ui/sql`): unlike the data browser, which always knows exactly
+which collection and row a structured create/update/delete touched,
+arbitrary SQL text would have to be parsed to determine that — multiple
+tables in one statement, rows matched by an arbitrary `WHERE` clause,
+no fixed row shape to attach to an event. This is a deliberate,
+narrower carve-out than the data browser's, not an oversight: a SQL
+Studio write is still fully audit-logged (ADMINUI-20) and still
+reflected the next time a subscriber's client re-fetches, just never
+pushed live.
+
 ## Known limitation: cross-process policy-change skew (multi-process only)
 
 Each maubase process holds its own independently-`Discover()`'d
