@@ -229,3 +229,17 @@ since it was written, but no scenario anywhere ever actually exercised
 this for the owner plane specifically — the only expiry-adjacent test
 checks that a *customer* session survives a purge unaffected, never the
 owner-plane rejection path itself.
+
+## OWNR-27: A malformed or garbage owner session cookie value is a clean 401
+Given a request carrying a `maubase_owner_session` cookie whose value is
+garbage — an empty string, an extremely long random string, or a value
+shaped like a SQL-metacharacter injection attempt — never a value this
+deployment actually issued,
+when it's presented to `GET /admin/auth/me` (or any other authenticated
+`/admin/*` route),
+then the response is `401`, the same as no cookie at all — never a
+`500`. `ValidateSession` hashes the raw token and looks it up via a
+parameterized query, so this was very likely already safe by
+construction, but untested — cheap insurance against a future refactor
+that starts handling the raw token unsafely (string-concatenated into a
+query, say).

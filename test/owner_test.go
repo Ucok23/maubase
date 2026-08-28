@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 
@@ -503,5 +504,36 @@ func TestOwner_ExpiredSessionRejected(t *testing.T) {
 	}
 	if me.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("want 401 for an expired owner session, got %d: %s", me.StatusCode, bodyString(t, me))
+	}
+}
+
+// TestOwner_MalformedSessionCookieRejectedCleanly exercises OWNR-27:
+// ValidateSession hashes the raw token and looks it up via a
+// parameterized query, so this was very likely already safe, but
+// nothing ever actually threw garbage at it to prove there's no path to
+// a 500.
+func TestOwner_MalformedSessionCookieRejectedCleanly(t *testing.T) {
+	// OWNR-27
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+
+	garbageValues := []string{
+		"",
+		strings.Repeat("a", 10000),
+		"'; DROP TABLE owner_sessions; --",
+		"' OR '1'='1",
+	}
+	for _, v := range garbageValues {
+		req, err := http.NewRequest(http.MethodGet, baseURL+"/admin/auth/me", nil)
+		if err != nil {
+			t.Fatalf("build request: %v", err)
+		}
+		req.AddCookie(&http.Cookie{Name: "maubase_owner_session", Value: v})
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET /admin/auth/me with garbage cookie: %v", err)
+		}
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("garbage cookie %q: want 401, got %d: %s", v, resp.StatusCode, bodyString(t, resp))
+		}
 	}
 }
