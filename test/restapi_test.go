@@ -357,6 +357,60 @@ func TestRestAPI_OwnerIDImmutable(t *testing.T) {
 	}
 }
 
+func TestRestAPI_OwnerIDNonTextAffinityFailsAtStartup(t *testing.T) {
+	// REST-OWNERSHIP-04
+	for _, tc := range []struct {
+		name, declType string
+	}{
+		{"integer", "INTEGER"},
+		{"numeric", "NUMERIC"},
+		{"real", "REAL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			schema := `CREATE TABLE bad_owner_notes (
+				id       TEXT PRIMARY KEY,
+				owner_id ` + tc.declType + ` NOT NULL,
+				title    TEXT NOT NULL
+			)`
+			err := testserver.NewCustomExpectingDiscoverError(t, testserver.Options{
+				Schema: []string{schema},
+			})
+			if err == nil {
+				t.Fatalf("want an error, got none")
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, "bad_owner_notes") || !strings.Contains(msg, "owner_id") {
+				t.Fatalf("want the error to name the table and owner_id, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestRestAPI_OwnerIDTextAffinityStillFiltersCorrectly(t *testing.T) {
+	// REST-OWNERSHIP-04: the codebase's own convention (owner_id TEXT) is
+	// unaffected by the startup check above, and continues to filter
+	// distinct subjects apart correctly — this is the "no coercion"
+	// counterpart to the numeric-affinity collision that check exists to
+	// reject at startup instead.
+	baseURL := testserver.NewWithSchema(t, notesSchema)
+	tokenA := restToken(t, baseURL, "text-affinity-a@example.com", []string{"records:read", "records:write"})
+	tokenB := restToken(t, baseURL, "text-affinity-b@example.com", []string{"records:read", "records:write"})
+
+	doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", tokenA, map[string]any{"title": "a's note"})
+	doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", tokenB, map[string]any{"title": "b's note"})
+
+	listA := doAuthed(t, http.MethodGet, baseURL+"/api/data/notes", tokenA, nil)
+	var bodyA struct {
+		Records []map[string]any `json:"records"`
+	}
+	if err := json.NewDecoder(listA.Body).Decode(&bodyA); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(bodyA.Records) != 1 || bodyA.Records[0]["title"] != "a's note" {
+		t.Fatalf("want exactly A's own note, got %v", bodyA.Records)
+	}
+}
+
 func TestRestAPI_SharedTableHasNoFiltering(t *testing.T) {
 	baseURL := testserver.NewWithSchema(t, tagsSchema)
 	tokenA := restToken(t, baseURL, "shared-a@example.com", []string{"records:read", "records:write"})
