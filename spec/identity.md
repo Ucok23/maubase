@@ -34,7 +34,8 @@ and no session cookie is set.
 ## IDNT-06: A signed-in user can fetch their own identity
 Given a valid session (cookie, or bearer token in `Authorization`),
 when they `GET /api/auth/me`,
-then the response is `200` with their id and email.
+then the response is `200` with their id and email. When both are
+present on the same request, see IDNT-18 for which one wins.
 
 ## IDNT-07: An anonymous request to a protected route is rejected
 Given no session cookie and no bearer token,
@@ -154,3 +155,17 @@ uncontested one; that's accepted as-is, not fixed here — a real fix
 means a transaction spanning auto-REST, storage, and OAuth grants
 together, a bigger change than this gap's severity has warranted so
 far.
+
+## IDNT-18: A bearer token takes precedence over a cookie when both are present
+Given a request carrying both a valid session cookie (for one account)
+and a valid `Authorization: Bearer` token (for a *different* account),
+when it's used for `GET /api/auth/me`,
+then the response reflects the bearer token's account, not the
+cookie's — `sessionTokenFromRequest` checks the `Authorization` header
+first and only falls back to the cookie when no bearer token is
+present, so an explicit header always wins over an ambient cookie. This
+matters for hybrid SSR/browser integrations that might attach both:
+silent authentication as the wrong account would be worse than an
+outright rejection, so the fixed precedence is stated here explicitly
+rather than left to whichever order the code happens to check things
+in.
