@@ -3,6 +3,7 @@ package e2e_test
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"sync"
 	"testing"
 
@@ -467,5 +468,40 @@ func TestOwner_Logout(t *testing.T) {
 	}
 	if me.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("want 401 after logout, got %d", me.StatusCode)
+	}
+}
+
+// TestOwner_ExpiredSessionRejected exercises OWNR-24: maintenance.md's
+// intro claims "Expired sessions already fail authentication on their
+// own," but no OWNR-xx scenario ever actually stated or tested this for
+// the owner plane specifically — the only expiry-adjacent test
+// (TestMaintenance_PurgeSessionsDoesNotTouchValidSessions,
+// spec/maintenance.md) checks a *customer* session stays valid post-purge,
+// never the owner-plane *rejection* path for a session that's past
+// expiry but not yet purged. With SQL Studio available, this is directly
+// testable: backdate the session's own expires_at, then confirm it's
+// rejected.
+func TestOwner_ExpiredSessionRejected(t *testing.T) {
+	// OWNR-24
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	sqlResp, err := owner.PostForm(baseURL+"/admin/ui/sql", url.Values{
+		"query": {"UPDATE owner_sessions SET expires_at = '2000-01-01 00:00:00'"},
+	})
+	if err != nil {
+		t.Fatalf("backdate session via SQL Studio: %v", err)
+	}
+	if sqlResp.StatusCode != http.StatusOK {
+		t.Fatalf("SQL Studio update: want 200, got %d: %s", sqlResp.StatusCode, bodyString(t, sqlResp))
+	}
+
+	me, err := owner.Get(baseURL + "/admin/auth/me")
+	if err != nil {
+		t.Fatalf("GET /admin/auth/me: %v", err)
+	}
+	if me.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("want 401 for an expired owner session, got %d: %s", me.StatusCode, bodyString(t, me))
 	}
 }
