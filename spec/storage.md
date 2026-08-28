@@ -64,6 +64,50 @@ then every file they uploaded is gone: an access token that could
 previously read it now gets `404` from both its metadata and content
 routes.
 
+## STOR-09: An oversized upload is rejected
+Given `MAUBASE_MAX_UPLOAD_MB` (or the 25MB default),
+when a caller `POST`s to `/api/storage/files` with a `file` part whose
+content exceeds that limit,
+then the response is `400` — the body is wrapped in an
+`http.MaxBytesReader` before the multipart form is parsed, so an
+oversized upload is rejected as soon as the reader notices, not after
+the whole thing has been buffered into memory or disk first. No file
+row or stored bytes exist afterward.
+
+## STOR-10: A malformed or field-incomplete multipart upload is rejected, not a 500
+Given a `POST /api/storage/files` request that is either not valid
+multipart (garbage/truncated body with a `multipart/form-data`
+`Content-Type`) or is valid multipart but has no `file` field at all,
+then the response is `400` in both cases — `ParseMultipartForm`'s own
+error for the first, an explicit `missing "file" field` check for the
+second — never a `500` from an unhandled parse failure reaching the
+database layer.
+
+## STOR-11: A zero-byte file uploads and downloads like any other
+Given a `file` part with no content at all,
+when it's uploaded,
+then the response is `201` with `size_bytes: 0` — there's no minimum
+size check, so an empty file is a legitimate upload, not an error — and
+a subsequent `GET .../content` returns `200` with an empty body, not a
+`404` or an error.
+
+## STOR-12: An adversarial filename renders correctly in the Content-Disposition header
+Given an uploaded file whose original filename contains characters a
+naive header-builder would mishandle — an embedded `"` or `\`, a
+control character (e.g. a newline), or non-ASCII text (e.g. `日本語.txt`
+or an emoji) —
+when it's downloaded via `GET .../content`,
+then the `Content-Disposition` header is always well-formed: a quote or
+backslash is escaped within a quoted `filename="..."` value; a control
+character or non-ASCII filename instead gets the RFC 5987/8187
+`filename*=utf-8''<percent-encoded>` form, per `mime.FormatMediaType`
+(used instead of a hand-built `fmt.Sprintf` quote, which left non-ASCII
+text embedded raw and unescaped in the header value). The storage key
+itself is always a fresh UUID (`internal/storage`'s own convention,
+independent of whatever the client named the file), so none of this is
+a path-traversal risk either way — it's purely about the header being
+correct for the browser's Save dialog to use.
+
 ## STOR-13: A partial failure mid-erasure leaves consistent, retryable state
 Given a user with 3 uploaded files, where deleting the 2nd file's bytes
 fails (a permissions error, or bytes already gone in a way that isn't
