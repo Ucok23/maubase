@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"testing"
 
+	"maubase/internal/email"
+	"maubase/internal/social"
 	"maubase/internal/testserver"
 )
 
@@ -187,6 +189,65 @@ func TestIdentity_DeleteAccountDoesNotAffectOtherUsers(t *testing.T) {
 	crossGet := doAuthed(t, http.MethodGet, baseURL+"/api/data/notes/"+idA, tokenB, nil)
 	if crossGet.StatusCode != http.StatusNotFound {
 		t.Fatalf("want A's deleted note inaccessible to B, got %d", crossGet.StatusCode)
+	}
+}
+
+func TestIdentity_DeleteAccountCascadesSocialIdentitiesAndResetTokens(t *testing.T) {
+	// IDNT-15
+	provider := fakeGoogleProvider(t, "idnt15-google-uid", "idnt15-provider-email@example.com")
+	sender := email.NewFakeSender()
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		SocialProviders: map[string]social.Provider{"google": provider},
+		EmailSender:     sender,
+	})
+
+	client := newClient(t)
+	signUp(t, client, baseURL, "idnt15-cascade@example.com", "correcthorse")
+
+	// Link a social identity to this account — SOCIAL-09: a signed-in
+	// session links the identity to the current account rather than
+	// matching/creating by email.
+	state := startSocialLogin(t, client, baseURL, "google")
+	linkResp := socialCallback(t, client, baseURL, "google", "fake-code", state)
+	if linkResp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("link social identity: want 303, got %d: %s", linkResp.StatusCode, bodyString(t, linkResp))
+	}
+
+	// Leave an outstanding, unredeemed password-reset token.
+	fpResp := forgotPassword(t, newClient(t), baseURL, "idnt15-cascade@example.com")
+	if fpResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("forgot-password: want 204, got %d: %s", fpResp.StatusCode, bodyString(t, fpResp))
+	}
+	resetToken := tokenFromResetLink(t, sender.Sent())
+
+	del, err := client.Do(mustRequest(t, http.MethodDelete, baseURL+"/api/auth/me"))
+	if err != nil {
+		t.Fatalf("DELETE /api/auth/me: %v", err)
+	}
+	if del.StatusCode != http.StatusNoContent {
+		t.Fatalf("want 204, got %d: %s", del.StatusCode, bodyString(t, del))
+	}
+
+	// The cascaded social_identities row is gone: the same provider
+	// identity completing the flow again is "never seen before", not a
+	// dangling link to a deleted account — it creates a brand-new
+	// account rather than erroring or resurrecting the old one.
+	returning := newClient(t)
+	state2 := startSocialLogin(t, returning, baseURL, "google")
+	cbResp := socialCallback(t, returning, baseURL, "google", "fake-code-2", state2)
+	if cbResp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("social login for the same identity after account erasure: want 303 (a fresh account), got %d: %s", cbResp.StatusCode, bodyString(t, cbResp))
+	}
+	newAccount := decodeJSONMap(t, mustGet(t, returning, baseURL+"/api/auth/me"))
+	if newAccount["email"] != "idnt15-provider-email@example.com" {
+		t.Fatalf("want a brand-new account for the same provider identity, got %v", newAccount)
+	}
+
+	// The cascaded password_reset_tokens row is gone: the old token no
+	// longer redeems.
+	reset := resetPassword(t, baseURL, resetToken, "wontworkanyway1")
+	if reset.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want the old reset token rejected after account erasure, got %d: %s", reset.StatusCode, bodyString(t, reset))
 	}
 }
 
