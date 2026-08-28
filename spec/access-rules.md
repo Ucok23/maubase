@@ -131,3 +131,23 @@ owns them. `read: denied` means no caller may read that collection
 through this API "regardless of caller or scope" (ACCESS-06); an export
 endpoint handing the same data back through a different door would
 contradict that guarantee.
+
+## ACCESS-11: Account erasure deletes owned rows regardless of that table's own `delete` policy
+Given an owner-scoped table with `delete: denied` declared, and a signed-in
+user with a row in it,
+when that same user calls `DELETE /api/data/{table}/{id}` directly on
+their own row,
+then it's refused (`403`, per ACCESS-05 — `denied` means no caller,
+including the row's own owner, regardless of scope);
+but when that user instead calls `DELETE /api/auth/me` (account erasure,
+IDNT-10/11), which internally deletes every row they own across every
+owner-scoped collection so no application data is left behind orphaned,
+then that same row is deleted anyway, `delete: denied` notwithstanding —
+account erasure never consults a collection's `DeleteRule` at all. This
+is deliberate: a `delete` policy exists to control what an end-user token
+can do to a collection through the ordinary REST surface, not to let a
+deployment's own policy configuration override a user's right to have
+their data erased. A deployment that genuinely needs data to outlive its
+owner's account (e.g. for a legal retention requirement) needs to
+re-parent or anonymize that data some other way — a `delete: denied`
+policy alone doesn't accomplish that today.

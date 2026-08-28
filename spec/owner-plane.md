@@ -173,3 +173,13 @@ rather than trusting the schema declaration, so a regression here (a
 migration tool that disables FK enforcement, a driver/DSN change) is
 caught immediately instead of leaving a just-removed owner fully
 authenticated for up to a week with nothing to notice.
+
+## OWNR-20: Owner email matching is case-insensitive too
+Given an owner-plane account created as `Admin@Example.com`,
+when a second `POST /admin/owners` (or the bootstrap step) is attempted
+with `admin@example.com`,
+then the response is `409` (email already taken), not a second account
+with the same effective address — the same normalize-before-write/
+lookup treatment `spec/identity.md` IDNT-14 describes for the customer
+plane, backed by the same kind of case-insensitive unique index at the
+schema level.

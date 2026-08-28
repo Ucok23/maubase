@@ -317,8 +317,17 @@ func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword strin
 	if _, err := tx.ExecContext(ctx, `UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, hash, userID); err != nil {
 		return "", fmt.Errorf("update password: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = ?`, id); err != nil {
-		return "", fmt.Errorf("mark reset token used: %w", err)
+	// Marks every outstanding token for this user as used, not just the
+	// one just redeemed: a second forgot-password request before the
+	// first is ever used leaves two valid tokens outstanding, and an old
+	// one resurfacing later (a mail archive, a previously-compromised-
+	// then-resecured inbox) could otherwise still reset the password
+	// within its own hour-long window, even after the account's owner
+	// believes it's fully re-secured. See PWRESET-12.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = ? AND used_at IS NULL
+	`, userID); err != nil {
+		return "", fmt.Errorf("mark reset tokens used: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID); err != nil {
 		return "", fmt.Errorf("revoke sessions: %w", err)
@@ -492,10 +501,19 @@ func (s *Service) getUserByID(ctx context.Context, id string) (*User, error) {
 	return &u, nil
 }
 
+// normalizeEmail lowercases and trims email so "User@Example.com" and
+// "user@example.com " are treated as the same address everywhere: signup
+// uniqueness, login lookup, reset-token lookup, and social-login account
+// linking (a provider reporting a differently-cased email than the one a
+// password account originally signed up with must still resolve to the
+// same account — see spec/identity.md IDNT-14). Full RFC 5321 casing
+// rules (a mailbox's local-part is technically case-sensitive per spec,
+// though virtually no real provider treats it that way) aren't worth
+// implementing here since this only needs consistent uniqueness, not
+// mailbox routing. See migrations/0010_case_insensitive_email.sql for the
+// matching schema-level defense in depth.
 func normalizeEmail(email string) string {
-	// Minimal normalization for v1; full RFC 5321 casing rules aren't worth
-	// it here since we only need consistent uniqueness, not mailbox routing.
-	return email
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
 func randomToken(n int) (string, error) {

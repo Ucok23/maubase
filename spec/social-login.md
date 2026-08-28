@@ -92,6 +92,14 @@ redirect from the provider itself after a real user completed that
 provider's own login, not something an attacker can drive at volume
 directly.
 
+## SOCIAL-08: Linking by matching email is case-insensitive
+See `spec/identity.md` IDNT-14: a provider reporting a differently-cased
+email than the one an existing password account signed up with (a
+common normalization difference — providers frequently report lowercase
+regardless of how the account owner originally typed it at signup)
+still links to that existing account under SOCIAL-02, rather than
+missing the match and silently creating a disconnected new one.
+
 ## Starting a social flow while already signed in
 
 Completing `google`/`github` with an existing identity-layer session

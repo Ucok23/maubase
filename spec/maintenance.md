@@ -44,10 +44,33 @@ counting failures. That's `POST /api/auth/login`, `POST
 (it calls the identical `auth.Service.Login` a plain login does — this
 was a complete bypass of the JSON endpoint's own throttle before it was
 covered here too), and `POST /admin/ui/login` (the human-facing admin
-page; it uses its own separate limiter instance from the JSON API's,
-since `internal/adminui.Server` is constructed independently — but the
-same per-IP-per-window shape). Every deployment ships with a default
-limit; see the README for how to tune it.
+page). Every deployment ships with a default limit; see the README for
+how to tune it.
+
+These aren't all one shared budget. `POST /admin/auth/login` and
+`POST /admin/ui/login` (owner plane) each have their own limiter
+instance, entirely separate from the one `POST /api/auth/login`,
+`POST /api/auth/forgot-password`/`reset-password`, and `/oauth/authorize`'s
+login step (customer plane) share among themselves — see MAINT-06. The
+customer-plane group sharing one bucket among themselves is deliberate
+(they're all "someone repeatedly hitting an auth endpoint for this
+IP" abuse); registering an OAuth client (`POST /oauth/register`) is its
+own bucket too, separate from every login endpoint, since registration
+is incidental to all sorts of legitimate setup unrelated to guessing a
+password.
+
+## MAINT-06: Customer-plane and owner-plane login throttles are independent budgets
+Given a client IP that has exhausted the customer-plane login budget
+(`POST /api/auth/login`, `/forgot-password`, `/reset-password`, or
+`/oauth/authorize`'s login step — see above) and gets `429` from all of
+them,
+when that same IP then attempts `POST /admin/auth/login`,
+then it's evaluated against its own, still-fresh budget — unaffected by
+the customer-plane exhaustion. The reverse holds too: exhausting
+`/admin/auth/login`'s budget doesn't touch the customer-plane one. A
+shared office/NAT IP an admin also uses shouldn't let unrelated
+customer-plane traffic lock that admin out of the owner plane during an
+incident, or vice versa.
 
 ## MAINT-04: Excess login attempts are rejected
 Given a login endpoint (customer plane, owner plane, the admin UI's own

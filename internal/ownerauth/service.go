@@ -18,6 +18,15 @@ import (
 
 var emailRe = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
 
+// normalizeEmail lowercases and trims email, mirroring
+// internal/auth's identically-named, identically-motivated helper — see
+// its doc comment. Kept as its own copy rather than shared code since
+// the owner and customer planes are deliberately independent packages
+// with no dependency between them (see this package's own doc comment).
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
 type Service struct {
 	db *sql.DB
 }
@@ -55,7 +64,7 @@ func (s *Service) CreateOwner(ctx context.Context, email, password string, role 
 }
 
 func (s *Service) createOwner(ctx context.Context, email, password string, role Role) (*Owner, error) {
-	email = strings.TrimSpace(email)
+	email = normalizeEmail(email)
 	if !emailRe.MatchString(email) {
 		return nil, ErrInvalidEmail
 	}
@@ -82,7 +91,7 @@ func (s *Service) createOwner(ctx context.Context, email, password string, role 
 }
 
 func (s *Service) Login(ctx context.Context, email, password string) (*Session, error) {
-	email = strings.TrimSpace(email)
+	email = normalizeEmail(email)
 
 	var id string
 	var hash string
