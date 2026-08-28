@@ -192,3 +192,27 @@ func TestOwnerAudit_ReadingRequiresAtLeastAdmin(t *testing.T) {
 		t.Fatalf("want 403 for viewer reading the audit log, got %d: %s", denied.StatusCode, bodyString(t, denied))
 	}
 }
+
+// TestOwnerAudit_DeveloperCannotReadEither is the "GET /admin/audit-log"
+// half of OWNR-23 (see test/owner_test.go's
+// TestOwner_DeveloperCannotListAccountsEither for the /admin/owners
+// half): TestOwnerAudit_ReadingRequiresAtLeastAdmin (OWNR-16) only ever
+// checked viewer, never developer — the rung directly adjacent to the
+// admin+ boundary this test guards.
+func TestOwnerAudit_DeveloperCannotReadEither(t *testing.T) {
+	// OWNR-23
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	createOwner(t, owner, baseURL, "ownr23-audit-dev@example.com", "correcthorse", "developer")
+
+	dev := newClient(t)
+	ownerLogin(t, dev, baseURL, "ownr23-audit-dev@example.com", "correcthorse")
+	denied, err := dev.Get(baseURL + "/admin/audit-log")
+	if err != nil {
+		t.Fatalf("GET /admin/audit-log: %v", err)
+	}
+	if denied.StatusCode != http.StatusForbidden {
+		t.Fatalf("want 403 for a developer-role account reading the audit log, got %d: %s", denied.StatusCode, bodyString(t, denied))
+	}
+}
