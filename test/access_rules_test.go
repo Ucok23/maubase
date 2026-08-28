@@ -3,6 +3,7 @@ package e2e_test
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -310,4 +311,63 @@ func TestAccessRules_AccountErasureIgnoresDeletePolicy(t *testing.T) {
 	if gone.StatusCode != http.StatusNotFound {
 		t.Fatalf("want the row gone after account erasure despite delete:denied, got %d", gone.StatusCode)
 	}
+}
+
+// TestAccessRules_RuntimePolicyChangeAppliesToAlreadyOpenSubscriptions
+// exercises ACCESS-12: Broker.Subscribe stores no rule/snapshot at
+// subscribe time, and publish computes each event's visibility from
+// col.ReadRule read out of the *live* registry at write time — so a
+// _policies change made through SQL Studio (which triggers
+// ReloadSchema) takes effect for an already-open subscription's very
+// next event, not just for new subscriptions made after the change.
+// This was true by construction but never actually demonstrated: the
+// implementation "happens to float" rather than pin visibility to
+// whatever was in effect when a connection subscribed, and that's a
+// deliberate design decision worth being explicit and tested about,
+// not an accident.
+func TestAccessRules_RuntimePolicyChangeAppliesToAlreadyOpenSubscriptions(t *testing.T) {
+	// ACCESS-12
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		Schema: []string{notesSchema, policyRow("notes", "read", "shared")},
+	})
+	tokenA := restToken(t, baseURL, "access12-a@example.com", []string{"records:read", "records:write"})
+	tokenB := restToken(t, baseURL, "access12-b@example.com", []string{"records:read", "records:write"})
+
+	rcB := connectRealtime(t, baseURL, tokenB)
+	subscribe(t, rcB, "notes")
+
+	// Under read:shared, B (who owns nothing here) still sees A's write.
+	createResp1 := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", tokenA, map[string]any{"title": "before the policy change", "body": "x"})
+	if createResp1.StatusCode != http.StatusCreated {
+		t.Fatalf("create note 1: want 201, got %d: %s", createResp1.StatusCode, bodyString(t, createResp1))
+	}
+	ev := readEvent(t, rcB)
+	if ev.Type != "created" || ev.Record["title"] != "before the policy change" {
+		t.Fatalf("want B to see A's row under read:shared, got %+v", ev)
+	}
+
+	// Narrow read:shared to read:owner via SQL Studio (owner-plane,
+	// triggers ReloadSchema) — B's subscription stays open throughout,
+	// never resubscribing.
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	sqlResp, err := owner.PostForm(baseURL+"/admin/ui/sql", url.Values{
+		"query": {"UPDATE _policies SET rule = 'owner' WHERE collection = 'notes' AND operation = 'read'"},
+	})
+	if err != nil {
+		t.Fatalf("narrow policy via SQL Studio: %v", err)
+	}
+	if sqlResp.StatusCode != http.StatusOK {
+		t.Fatalf("SQL Studio update: want 200, got %d: %s", sqlResp.StatusCode, bodyString(t, sqlResp))
+	}
+
+	// The same, still-open subscription no longer sees A's rows — the
+	// live (post-change) rule applied to this write, not whatever rule
+	// was in effect when B subscribed.
+	createResp2 := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", tokenA, map[string]any{"title": "after the policy change", "body": "x"})
+	if createResp2.StatusCode != http.StatusCreated {
+		t.Fatalf("create note 2: want 201, got %d: %s", createResp2.StatusCode, bodyString(t, createResp2))
+	}
+	expectNoEvent(t, rcB)
 }
