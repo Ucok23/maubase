@@ -196,3 +196,21 @@ same treatment `spec/auto-rest.md` REST-PAGINATION-01 gives
 `GET /api/data/{table}`, applied here for the same reason: an admin
 explicitly asking for more entries than the max used to silently get
 the default page back with no indication their request was truncated.
+
+## OWNR-22: Creating owner-plane accounts is refused one rung down from owner too
+Given a signed-in account with role `admin` — the rung immediately
+below `owner`, not the widest possible gap —
+when they attempt `POST /admin/owners`,
+then the response is `403`, same as OWNR-06 already establishes for
+`developer`/`viewer`. OWNR-06's own test only ever checked the widest
+gap (owner vs. developer); the adjacent rung is where a
+`role.AtLeast(...)` off-by-one would actually show up.
+
+## OWNR-23: Reading owner-plane accounts or the audit log is refused one rung down from admin too
+Given a signed-in account with role `developer` — the rung immediately
+below `admin`, not the widest possible gap —
+when they attempt `GET /admin/owners` or `GET /admin/audit-log`,
+then the response is `403` for both, same as OWNR-07/16 already
+establish for `viewer`. Both of those scenarios' own tests only ever
+checked the widest gap (admin/owner vs. viewer); the adjacent rung is
+where a `role.AtLeast(...)` off-by-one would actually show up.
