@@ -183,3 +183,18 @@ with the same effective address — the same normalize-before-write/
 lookup treatment `spec/identity.md` IDNT-14 describes for the customer
 plane, backed by the same kind of case-insensitive unique index at the
 schema level.
+
+## OWNR-24: An expired owner session is rejected
+Given an owner-plane session whose `expires_at` has already passed (but
+hasn't been purged yet — see `spec/maintenance.md`'s purge-sessions
+maintenance action, a separate concern from expiry itself),
+when its cookie is presented to any authenticated `/admin/*` or
+`/admin/ui/*` route,
+then the response is `401`, identical to a session that never existed —
+`ValidateSession`'s own `time.Now().After(expiresAt)` check rejects it
+directly, without needing a purge to run first. `maintenance.md`'s intro
+has stated "expired sessions already fail authentication on their own"
+since it was written, but no scenario anywhere ever actually exercised
+this for the owner plane specifically — the only expiry-adjacent test
+checks that a *customer* session survives a purge unaffected, never the
+owner-plane rejection path itself.
