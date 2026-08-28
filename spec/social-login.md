@@ -132,3 +132,28 @@ Before this, the session cookie was unconditionally overwritten with
 whatever account the identity resolved to, so a curious click while
 signed in could switch the browser to an unrelated account with no
 warning at all.
+
+## SOCIAL-12: A GitHub identity with zero verified emails gets a synthetic address with no real recovery path
+Given a GitHub account whose public profile has no email set (SOCIAL-06)
+and whose `/user/emails` list contains no `primary && verified` entry
+either (a real, if unusual, GitHub account state — every address
+unverified, or the list empty),
+when it completes the `github` flow for the first time,
+then an account is still created (this never blocks sign-in) with a
+synthetic address of the form
+`github-{provider user id}@users.noreply.github.invalid` — a `.invalid`
+TLD (RFC 2606), guaranteed to never resolve at any real mail server.
+This account has **no recovery path**: `POST /api/auth/forgot-password`
+with that exact synthetic address behaves completely normally from
+maubase's own point of view (finds the account, issues a token, calls
+the configured `email.Sender` — indistinguishable from any other
+account, per PWRESET-02's "identical either way" guarantee) but the
+resulting email can never actually be delivered to reach the person,
+since nothing on the internet is listening at a `.invalid` domain — and
+the person has no way to even know this address exists to type it in.
+Signing in again via the same `github` identity is the only way back
+into the account. This is a real dead-end, not merely a theoretical
+one: documented here explicitly rather than only in
+`createUserForSocialSignIn`'s own code comment, since a user reaching
+this state has no admin-UI-visible signal today distinguishing their
+account from a normal one either.

@@ -244,6 +244,32 @@ func TestSocialLogin_GitHubFallsBackToPrimaryVerifiedEmail(t *testing.T) {
 	}
 }
 
+// TestSocialLogin_GitHubZeroVerifiedEmailsGetsSyntheticAddress exercises
+// SOCIAL-12: no email on the main profile (SOCIAL-06's case) *and* no
+// primary+verified entry in /user/emails either — the account still
+// gets created, with createUserForSocialSignIn's synthetic
+// "provider-id@users.noreply.provider.invalid" placeholder locked in
+// exactly, since a future refactor changing this format without
+// updating spec/social-login.md SOCIAL-12 would be exactly the kind of
+// silent regression worth catching here.
+func TestSocialLogin_GitHubZeroVerifiedEmailsGetsSyntheticAddress(t *testing.T) {
+	// SOCIAL-12
+	srv := fakeProviderServer(t, `{"id":777,"email":""}`, `[{"email":"unverified@example.com","primary":true,"verified":false}]`)
+	provider := social.NewGitHub("test-client-id", "test-client-secret", "http://placeholder.invalid/callback",
+		srv.URL+"/authorize", srv.URL+"/token", srv.URL+"/userinfo", srv.URL+"/emails")
+	baseURL := testserver.NewCustom(t, testserver.Options{SocialProviders: map[string]social.Provider{"github": provider}})
+	client := newClient(t)
+
+	state := startSocialLogin(t, client, baseURL, "github")
+	resp := socialCallback(t, client, baseURL, "github", "fake-code", state)
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("callback: want 303, got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+	if email := meEmail(t, client, baseURL); email != "github-777@users.noreply.github.invalid" {
+		t.Fatalf("want the synthetic github-{id}@users.noreply.github.invalid address, got %q", email)
+	}
+}
+
 func TestSocialLogin_StartIsRateLimited(t *testing.T) {
 	// SOCIAL-07
 	provider := fakeGoogleProvider(t, "google-uid-ratelimit", "social07@example.com")
