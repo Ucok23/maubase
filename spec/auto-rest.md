@@ -68,6 +68,31 @@ then it's ignored — the stored value is always the token's subject.
 When an update body includes an `owner_id` field,
 then it's ignored — the record's owner never changes via the API.
 
+## REST-OWNERSHIP-04: owner_id must have TEXT affinity
+Given a deployment migration that declares `owner_id` with any type
+other than one that gives it SQLite TEXT affinity (e.g. `owner_id
+INTEGER`, `owner_id NUMERIC`, `owner_id REAL`, or `owner_id` given a
+bare/blob-affinity type) — `Discover` only checked the column *name*
+against `spec/auto-rest.md`'s `owner_id` convention, never its declared
+type,
+when the server starts and discovers that table,
+then startup fails with an error naming the table and its declared
+type, the same "loud failure over a silent misconfiguration" treatment
+`spec/access-rules.md` ACCESS-08 already gives an `owner` policy on a
+table with no `owner_id` column at all. A non-TEXT affinity is a real
+data-isolation risk, not just a style nit: every subject this codebase
+issues is a UUID (`uuid.NewString()`), which never looks like a
+canonical numeric literal, so it always survives storage as TEXT — but
+a numeric affinity column (INTEGER, REAL, or the NUMERIC catch-all)
+coerces any value that *does* look numeric before storing or comparing
+it, so differently-formatted subjects that coerce to the same number
+(`"7"`, `"07"`, and `"7.0"` all become the stored integer `7`) would
+end up scoped to each other's rows — every caller filtering by any one
+of those three subject strings would see all three owners' rows,
+indistinguishable from one being genuinely shared. `owner_id TEXT NOT
+NULL` (what every migration and `AdminCreateTable`-generated table in
+this codebase already uses) has no such coercion and is unaffected.
+
 ## REST-SHARED-01: A table without an owner_id column is fully shared
 Given a table with no `owner_id` column,
 when two different authenticated customers, each with the right scope,
@@ -112,3 +137,21 @@ then the response is `400` naming that field — no SQLite column type
 can ever bind a nested structure, so this is caught before the query is
 even built rather than surfacing as an opaque `500` from the database
 driver.
+
+## REST-PAGINATION-01: An out-of-range or invalid limit/offset is rejected, not silently substituted
+Given `GET /api/data/{table}`,
+when `limit`/`offset` are both omitted,
+then the response uses the documented defaults (`limit=50`) exactly as
+before — this is the common case, and omitting them is not an error.
+But when `limit` or `offset` *is* given and is invalid — non-numeric,
+zero or negative for `limit`, negative for `offset`, or a `limit` over
+the stated maximum of 200 —
+then the response is `400` naming the problem (e.g. `limit must not
+exceed 200, got 500`), rather than silently substituting the default as
+if the parameter had been omitted. A caller explicitly asking for
+`limit=999999` used to silently get the *default* 50 back with nothing
+in the response distinguishing that from "there are only 50 rows total"
+— easy to mistake a truncated page for a complete result, e.g. when
+building an export that assumes it saw everything. `PATCH`/`DELETE`
+aren't paginated and are unaffected; this applies to every `GET
+/api/data/{table}` list request.

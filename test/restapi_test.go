@@ -357,6 +357,60 @@ func TestRestAPI_OwnerIDImmutable(t *testing.T) {
 	}
 }
 
+func TestRestAPI_OwnerIDNonTextAffinityFailsAtStartup(t *testing.T) {
+	// REST-OWNERSHIP-04
+	for _, tc := range []struct {
+		name, declType string
+	}{
+		{"integer", "INTEGER"},
+		{"numeric", "NUMERIC"},
+		{"real", "REAL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			schema := `CREATE TABLE bad_owner_notes (
+				id       TEXT PRIMARY KEY,
+				owner_id ` + tc.declType + ` NOT NULL,
+				title    TEXT NOT NULL
+			)`
+			err := testserver.NewCustomExpectingDiscoverError(t, testserver.Options{
+				Schema: []string{schema},
+			})
+			if err == nil {
+				t.Fatalf("want an error, got none")
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, "bad_owner_notes") || !strings.Contains(msg, "owner_id") {
+				t.Fatalf("want the error to name the table and owner_id, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestRestAPI_OwnerIDTextAffinityStillFiltersCorrectly(t *testing.T) {
+	// REST-OWNERSHIP-04: the codebase's own convention (owner_id TEXT) is
+	// unaffected by the startup check above, and continues to filter
+	// distinct subjects apart correctly — this is the "no coercion"
+	// counterpart to the numeric-affinity collision that check exists to
+	// reject at startup instead.
+	baseURL := testserver.NewWithSchema(t, notesSchema)
+	tokenA := restToken(t, baseURL, "text-affinity-a@example.com", []string{"records:read", "records:write"})
+	tokenB := restToken(t, baseURL, "text-affinity-b@example.com", []string{"records:read", "records:write"})
+
+	doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", tokenA, map[string]any{"title": "a's note"})
+	doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", tokenB, map[string]any{"title": "b's note"})
+
+	listA := doAuthed(t, http.MethodGet, baseURL+"/api/data/notes", tokenA, nil)
+	var bodyA struct {
+		Records []map[string]any `json:"records"`
+	}
+	if err := json.NewDecoder(listA.Body).Decode(&bodyA); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(bodyA.Records) != 1 || bodyA.Records[0]["title"] != "a's note" {
+		t.Fatalf("want exactly A's own note, got %v", bodyA.Records)
+	}
+}
+
 func TestRestAPI_SharedTableHasNoFiltering(t *testing.T) {
 	baseURL := testserver.NewWithSchema(t, tagsSchema)
 	tokenA := restToken(t, baseURL, "shared-a@example.com", []string{"records:read", "records:write"})
@@ -502,5 +556,35 @@ func TestRestAPI_PrimaryKeyImmutable(t *testing.T) {
 	stillThere := doAuthed(t, http.MethodGet, baseURL+"/api/data/notes/"+id, token, nil)
 	if stillThere.StatusCode != http.StatusOK {
 		t.Fatalf("want the original id to still resolve, got %d", stillThere.StatusCode)
+	}
+}
+
+func TestRestAPI_OutOfRangePaginationIsRejected(t *testing.T) {
+	// REST-PAGINATION-01
+	baseURL := testserver.NewWithSchema(t, notesSchema)
+	token := restToken(t, baseURL, "pagination-invalid@example.com", []string{"records:read", "records:write"})
+
+	for _, tc := range []struct{ name, query string }{
+		{"limit too high", "?limit=999999"},
+		{"limit zero", "?limit=0"},
+		{"limit negative", "?limit=-1"},
+		{"limit non-numeric", "?limit=abc"},
+		{"offset negative", "?offset=-1"},
+		{"offset non-numeric", "?offset=abc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := doAuthed(t, http.MethodGet, baseURL+"/api/data/notes"+tc.query, token, nil)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d: %s", resp.StatusCode, bodyString(t, resp))
+			}
+		})
+	}
+
+	// Omitted entirely still works, defaulting exactly as before —
+	// rejection only applies to a param that's actually present and
+	// out of range, not to "unset."
+	ok := doAuthed(t, http.MethodGet, baseURL+"/api/data/notes", token, nil)
+	if ok.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 with no pagination params, got %d", ok.StatusCode)
 	}
 }

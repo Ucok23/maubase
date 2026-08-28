@@ -1,9 +1,13 @@
 package e2e_test
 
 import (
+	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 
+	"maubase/internal/email"
+	"maubase/internal/social"
 	"maubase/internal/testserver"
 )
 
@@ -187,6 +191,181 @@ func TestIdentity_DeleteAccountDoesNotAffectOtherUsers(t *testing.T) {
 	crossGet := doAuthed(t, http.MethodGet, baseURL+"/api/data/notes/"+idA, tokenB, nil)
 	if crossGet.StatusCode != http.StatusNotFound {
 		t.Fatalf("want A's deleted note inaccessible to B, got %d", crossGet.StatusCode)
+	}
+}
+
+func TestIdentity_DeleteAccountCascadesSocialIdentitiesAndResetTokens(t *testing.T) {
+	// IDNT-15
+	provider := fakeGoogleProvider(t, "idnt15-google-uid", "idnt15-provider-email@example.com")
+	sender := email.NewFakeSender()
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		SocialProviders: map[string]social.Provider{"google": provider},
+		EmailSender:     sender,
+	})
+
+	client := newClient(t)
+	signUp(t, client, baseURL, "idnt15-cascade@example.com", "correcthorse")
+
+	// Link a social identity to this account — SOCIAL-09: a signed-in
+	// session links the identity to the current account rather than
+	// matching/creating by email.
+	state := startSocialLogin(t, client, baseURL, "google")
+	linkResp := socialCallback(t, client, baseURL, "google", "fake-code", state)
+	if linkResp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("link social identity: want 303, got %d: %s", linkResp.StatusCode, bodyString(t, linkResp))
+	}
+
+	// Leave an outstanding, unredeemed password-reset token.
+	fpResp := forgotPassword(t, newClient(t), baseURL, "idnt15-cascade@example.com")
+	if fpResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("forgot-password: want 204, got %d: %s", fpResp.StatusCode, bodyString(t, fpResp))
+	}
+	resetToken := tokenFromResetLink(t, sender.Sent())
+
+	del, err := client.Do(mustRequest(t, http.MethodDelete, baseURL+"/api/auth/me"))
+	if err != nil {
+		t.Fatalf("DELETE /api/auth/me: %v", err)
+	}
+	if del.StatusCode != http.StatusNoContent {
+		t.Fatalf("want 204, got %d: %s", del.StatusCode, bodyString(t, del))
+	}
+
+	// The cascaded social_identities row is gone: the same provider
+	// identity completing the flow again is "never seen before", not a
+	// dangling link to a deleted account — it creates a brand-new
+	// account rather than erroring or resurrecting the old one.
+	returning := newClient(t)
+	state2 := startSocialLogin(t, returning, baseURL, "google")
+	cbResp := socialCallback(t, returning, baseURL, "google", "fake-code-2", state2)
+	if cbResp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("social login for the same identity after account erasure: want 303 (a fresh account), got %d: %s", cbResp.StatusCode, bodyString(t, cbResp))
+	}
+	newAccount := decodeJSONMap(t, mustGet(t, returning, baseURL+"/api/auth/me"))
+	if newAccount["email"] != "idnt15-provider-email@example.com" {
+		t.Fatalf("want a brand-new account for the same provider identity, got %v", newAccount)
+	}
+
+	// The cascaded password_reset_tokens row is gone: the old token no
+	// longer redeems.
+	reset := resetPassword(t, baseURL, resetToken, "wontworkanyway1")
+	if reset.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want the old reset token rejected after account erasure, got %d: %s", reset.StatusCode, bodyString(t, reset))
+	}
+}
+
+// TestIdentity_ConcurrentDuplicateSignupsOnlyOneSucceeds exercises
+// IDNT-16: SignUp relies on the database's own UNIQUE constraint on
+// email failing for the loser, not a check-then-insert (which a future
+// "optimization" — check if the email exists first, then insert — could
+// silently reintroduce a race for), so this was probably already
+// race-safe, but nothing ever actually fired concurrent signups at the
+// same email to prove it.
+func TestIdentity_ConcurrentDuplicateSignupsOnlyOneSucceeds(t *testing.T) {
+	// IDNT-16
+	baseURL := testserver.New(t)
+	const n = 10
+	const email = "idnt16-concurrent@example.com"
+
+	results := make(chan int, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp := postJSON(t, newClient(t), baseURL+"/api/auth/signup", map[string]string{
+				"email": email, "password": "correcthorse",
+			})
+			results <- resp.StatusCode
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	var successes, conflicts int
+	for status := range results {
+		switch status {
+		case http.StatusCreated:
+			successes++
+		case http.StatusConflict:
+			conflicts++
+		default:
+			t.Fatalf("concurrent signup: want 201 or 409, got %d", status)
+		}
+	}
+	if successes != 1 || conflicts != n-1 {
+		t.Fatalf("want exactly 1 success and %d conflicts among %d concurrent signups for the same email, got %d successes and %d conflicts", n-1, n, successes, conflicts)
+	}
+}
+
+// TestIdentity_ConcurrentExportDuringDeleteNeverCorruptsOrErrors
+// exercises IDNT-17: handleDeleteAccount's multi-step erasure isn't
+// wrapped in a transaction (application data, then storage, then OAuth
+// grants, then the account itself, each its own separate statement/call
+// — see its own doc comment), so a concurrent GET /api/auth/me/export
+// can genuinely observe a mix of already-erased and not-yet-erased
+// collections, with no signal in the response distinguishing that from
+// a complete, uncontested export. That's accepted, not fixed here — a
+// full fix means wrapping cross-store erasure in a transaction spanning
+// auto-REST, storage, and OAuth grants, a bigger change than this
+// scenario's severity warrants — but the actual safety properties this
+// relies on (never a 500, never a torn/partial row within one
+// collection, since each collection's read or delete is its own single
+// atomic SQL statement) had never been exercised concurrently at all.
+func TestIdentity_ConcurrentExportDuringDeleteNeverCorruptsOrErrors(t *testing.T) {
+	// IDNT-17
+	baseURL := testserver.NewWithSchema(t, notesSchema)
+	client := newClient(t)
+	signUp(t, client, baseURL, "idnt17-concurrent@example.com", "correcthorse")
+	token := restTokenForClient(t, baseURL, client)
+
+	for i := 0; i < 5; i++ {
+		doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", token, map[string]any{"title": fmt.Sprintf("note-%d", i)})
+	}
+
+	var exportResp *http.Response
+	var exportErr error
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		exportResp, exportErr = client.Get(baseURL + "/api/auth/me/export")
+	}()
+
+	delResp, delErr := client.Do(mustRequest(t, http.MethodDelete, baseURL+"/api/auth/me"))
+	wg.Wait()
+
+	if delErr != nil {
+		t.Fatalf("DELETE /api/auth/me: %v", delErr)
+	}
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete: want 204, got %d: %s", delResp.StatusCode, bodyString(t, delResp))
+	}
+
+	if exportErr != nil {
+		t.Fatalf("concurrent GET /api/auth/me/export: %v", exportErr)
+	}
+	// The export's session lookup can land on either side of the delete
+	// revoking it: 200 with a (possibly partial, per this test's own doc
+	// comment) snapshot, or 401 once the session is already gone. Never
+	// a 500 — that's the actual property under test.
+	if exportResp.StatusCode != http.StatusOK && exportResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("concurrent export during delete: want 200 or 401, got %d: %s", exportResp.StatusCode, bodyString(t, exportResp))
+	}
+	if exportResp.StatusCode == http.StatusOK {
+		body := decodeJSONMap(t, exportResp)
+		records, _ := body["records"].(map[string]any)
+		if notesVal, ok := records["notes"]; ok {
+			list, _ := notesVal.([]any)
+			// Whatever count of notes it saw (anywhere from 0 to all 5,
+			// depending on how the race landed), every row present is a
+			// complete, real record — never a torn/partial one.
+			for _, r := range list {
+				rec, _ := r.(map[string]any)
+				if rec["id"] == nil || rec["title"] == nil {
+					t.Fatalf("want every exported row complete, got %v", rec)
+				}
+			}
+		}
 	}
 }
 
