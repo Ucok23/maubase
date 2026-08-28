@@ -558,3 +558,33 @@ func TestRestAPI_PrimaryKeyImmutable(t *testing.T) {
 		t.Fatalf("want the original id to still resolve, got %d", stillThere.StatusCode)
 	}
 }
+
+func TestRestAPI_OutOfRangePaginationIsRejected(t *testing.T) {
+	// REST-PAGINATION-01
+	baseURL := testserver.NewWithSchema(t, notesSchema)
+	token := restToken(t, baseURL, "pagination-invalid@example.com", []string{"records:read", "records:write"})
+
+	for _, tc := range []struct{ name, query string }{
+		{"limit too high", "?limit=999999"},
+		{"limit zero", "?limit=0"},
+		{"limit negative", "?limit=-1"},
+		{"limit non-numeric", "?limit=abc"},
+		{"offset negative", "?offset=-1"},
+		{"offset non-numeric", "?offset=abc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := doAuthed(t, http.MethodGet, baseURL+"/api/data/notes"+tc.query, token, nil)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d: %s", resp.StatusCode, bodyString(t, resp))
+			}
+		})
+	}
+
+	// Omitted entirely still works, defaulting exactly as before —
+	// rejection only applies to a param that's actually present and
+	// out of range, not to "unset."
+	ok := doAuthed(t, http.MethodGet, baseURL+"/api/data/notes", token, nil)
+	if ok.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 with no pagination params, got %d", ok.StatusCode)
+	}
+}

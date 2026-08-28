@@ -192,3 +192,29 @@ func TestOwnerAudit_ReadingRequiresAtLeastAdmin(t *testing.T) {
 		t.Fatalf("want 403 for viewer reading the audit log, got %d: %s", denied.StatusCode, bodyString(t, denied))
 	}
 }
+
+func TestOwnerAudit_OutOfRangePaginationIsRejected(t *testing.T) {
+	// OWNR-21
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	for _, query := range []string{"?limit=999999", "?limit=0", "?limit=-1", "?limit=abc", "?offset=-1", "?offset=abc"} {
+		resp, err := owner.Get(baseURL + "/admin/audit-log" + query)
+		if err != nil {
+			t.Fatalf("GET /admin/audit-log%s: %v", query, err)
+		}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("GET /admin/audit-log%s: want 400, got %d: %s", query, resp.StatusCode, bodyString(t, resp))
+		}
+	}
+
+	// Omitted entirely still works, defaulting exactly as before.
+	ok, err := owner.Get(baseURL + "/admin/audit-log")
+	if err != nil {
+		t.Fatalf("GET /admin/audit-log: %v", err)
+	}
+	if ok.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 with no pagination params, got %d", ok.StatusCode)
+	}
+}
