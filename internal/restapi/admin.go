@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"maubase/internal/realtime"
 )
 
 // The methods in this file back the embedded admin UI's data browser
@@ -85,7 +87,11 @@ func (s *Server) AdminGetRow(ctx context.Context, col *Collection, pkValue any) 
 // AdminCreateRow inserts a row from body. Unlike the customer-facing
 // POST /api/data/{table}, body's owner_id (if any) is used as-is rather
 // than overridden to a caller's subject — reassigning ownership directly
-// is a deliberate admin-only capability (ADMINUI-13).
+// is a deliberate admin-only capability (ADMINUI-13). Like the
+// customer-facing write handlers, it publishes a realtime event for the
+// row afterward (spec/realtime.md RT-11) — the data browser is "some
+// other way" of writing a row, and the fan-out invariant applies to it
+// exactly as it does to /api/data/*.
 func (s *Server) AdminCreateRow(ctx context.Context, col *Collection, body map[string]any) (map[string]any, error) {
 	if !col.PKIsInteger {
 		if v, has := body[col.PKColumn]; !has || v == nil || v == "" {
@@ -119,12 +125,18 @@ func (s *Server) AdminCreateRow(ctx context.Context, col *Collection, body map[s
 	} else {
 		pkValue = body[col.PKColumn]
 	}
-	return s.AdminGetRow(ctx, col, pkValue)
+	record, err := s.AdminGetRow(ctx, col, pkValue)
+	if err != nil {
+		return nil, err
+	}
+	s.publish(col, realtime.Event{Type: "created", Collection: col.Name, Record: record}, ownerGateValue(col, record))
+	return record, nil
 }
 
 // AdminUpdateRow updates whichever of body's fields are real columns
 // other than the primary key, unscoped, and — unlike
-// PATCH /api/data/{table}/{id} — allows changing owner_id.
+// PATCH /api/data/{table}/{id} — allows changing owner_id. Publishes a
+// realtime "updated" event afterward, same as AdminCreateRow (RT-11).
 func (s *Server) AdminUpdateRow(ctx context.Context, col *Collection, pkValue any, body map[string]any) (map[string]any, error) {
 	delete(body, col.PKColumn)
 	if len(body) == 0 {
@@ -143,12 +155,26 @@ func (s *Server) AdminUpdateRow(ctx context.Context, col *Collection, pkValue an
 	if _, err := s.db.ExecContext(ctx, query, vals...); err != nil {
 		return nil, fmt.Errorf("update row: %w", err)
 	}
-	return s.AdminGetRow(ctx, col, pkValue)
+	record, err := s.AdminGetRow(ctx, col, pkValue)
+	if err != nil {
+		return nil, err
+	}
+	s.publish(col, realtime.Event{Type: "updated", Collection: col.Name, Record: record}, ownerGateValue(col, record))
+	return record, nil
 }
 
 // AdminDeleteRow deletes one row by primary key, unscoped. Returns
-// sql.ErrNoRows if there was no such row.
+// sql.ErrNoRows if there was no such row. Publishes a realtime "deleted"
+// event afterward, same as AdminCreateRow/AdminUpdateRow (RT-11) — the
+// row's owner is captured before the DELETE runs, same reasoning as
+// handleDelete's own gateVal capture, since there's no row left to query
+// for it afterward.
 func (s *Server) AdminDeleteRow(ctx context.Context, col *Collection, pkValue any) error {
+	var gateVal string
+	if col.ReadRule == RuleOwner && col.OwnerColumn != "" {
+		gateVal, _ = s.ownerValueForPK(ctx, col, pkValue)
+	}
+
 	query := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", quoteIdent(col.Name), quoteIdent(col.PKColumn))
 	res, err := s.db.ExecContext(ctx, query, pkValue)
 	if err != nil {
@@ -161,6 +187,7 @@ func (s *Server) AdminDeleteRow(ctx context.Context, col *Collection, pkValue an
 	if n == 0 {
 		return sql.ErrNoRows
 	}
+	s.publish(col, realtime.Event{Type: "deleted", Collection: col.Name, ID: fmt.Sprint(pkValue)}, gateVal)
 	return nil
 }
 
