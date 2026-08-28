@@ -39,7 +39,13 @@ func (s *Server) AdminCollection(name string) (*Collection, bool) {
 // AdminCreateTable already validated — falling back to the primary key
 // if it isn't a real column name (including "", the common case: no
 // sort requested yet). sortDir is normalized to ASC unless it's
-// case-insensitively "desc".
+// case-insensitively "desc". When sorting by a column other than the
+// primary key, the primary key is added as a secondary, ascending
+// sort key: sortCol alone rarely has values unique enough to give
+// LIMIT/OFFSET pagination a well-defined page boundary (ADMINUI-40) —
+// without a tie-break, rows sharing a sortCol value have no guaranteed
+// stable order across the separate queries each page issues, risking a
+// duplicated or skipped row right at the page split.
 func (s *Server) AdminListRows(ctx context.Context, col *Collection, limit, offset int, sortCol, sortDir string) ([]map[string]any, error) {
 	orderCol := col.PKColumn
 	if col.HasColumn(sortCol) {
@@ -49,7 +55,11 @@ func (s *Server) AdminListRows(ctx context.Context, col *Collection, limit, offs
 	if strings.EqualFold(sortDir, "desc") {
 		dir = "DESC"
 	}
-	query := fmt.Sprintf("SELECT * FROM %s ORDER BY %s %s LIMIT ? OFFSET ?", quoteIdent(col.Name), quoteIdent(orderCol), dir)
+	orderBy := fmt.Sprintf("%s %s", quoteIdent(orderCol), dir)
+	if orderCol != col.PKColumn {
+		orderBy += fmt.Sprintf(", %s ASC", quoteIdent(col.PKColumn))
+	}
+	query := fmt.Sprintf("SELECT * FROM %s ORDER BY %s LIMIT ? OFFSET ?", quoteIdent(col.Name), orderBy)
 	rows, err := s.db.QueryContext(ctx, query, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("list rows: %w", err)

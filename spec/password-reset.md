@@ -122,3 +122,14 @@ after the first has already committed.
 the 256-bit token makes brute force impractical regardless, every
 "submit a secret" endpoint in this flow is throttled consistently
 rather than leaving one exception a future change could quietly widen.
+
+## PWRESET-12: Redeeming one token invalidates every other outstanding one for that account
+Given an account with two valid, unexpired reset tokens outstanding
+(two separate `forgot-password` requests, neither yet redeemed),
+when one of them is used to successfully reset the password,
+then the other immediately stops working too (`400` if submitted
+afterward) — not just left to expire on its own hour-long clock. An old
+reset link resurfacing later (a mail archive, an inbox that was
+compromised and has since been re-secured) must not still be able to
+reset the password once the account's owner believes a reset has
+already fully re-secured it.

@@ -317,8 +317,17 @@ func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword strin
 	if _, err := tx.ExecContext(ctx, `UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, hash, userID); err != nil {
 		return "", fmt.Errorf("update password: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = ?`, id); err != nil {
-		return "", fmt.Errorf("mark reset token used: %w", err)
+	// Marks every outstanding token for this user as used, not just the
+	// one just redeemed: a second forgot-password request before the
+	// first is ever used leaves two valid tokens outstanding, and an old
+	// one resurfacing later (a mail archive, a previously-compromised-
+	// then-resecured inbox) could otherwise still reset the password
+	// within its own hour-long window, even after the account's owner
+	// believes it's fully re-secured. See PWRESET-12.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = ? AND used_at IS NULL
+	`, userID); err != nil {
+		return "", fmt.Errorf("mark reset tokens used: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID); err != nil {
 		return "", fmt.Errorf("revoke sessions: %w", err)
@@ -330,8 +339,12 @@ func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword strin
 }
 
 // LoginOrCreateViaSocial resolves a successful "Continue with <provider>"
-// round trip (internal/social) to a session, in one of three ways:
+// round trip (internal/social) to a session. currentUserID is the caller's
+// already-signed-in identity-layer session, if any ("" if anonymous) —
+// this is what decides which of two entirely different resolution
+// strategies applies:
 //
+// Anonymous (currentUserID == ""), the original three-way resolution:
 //  1. This exact (provider, providerUserID) pair has signed in before —
 //     just start a new session for the user it's already linked to.
 //  2. It hasn't, but email matches an existing account (however that
@@ -347,37 +360,69 @@ func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword strin
 //     didn't supply a usable email at all (GitHub with no verified
 //     public address), a synthetic placeholder that still satisfies the
 //     UNIQUE constraint.
-func (s *Service) LoginOrCreateViaSocial(ctx context.Context, provider, providerUserID, email string) (*Session, error) {
-	var userID string
+//
+// Already signed in (currentUserID != ""): this is a "link a second
+// sign-in method to my account" request, not an independent identity
+// resolution, so email-matching never enters into it at all:
+//  1. This (provider, providerUserID) pair is already linked to the
+//     *current* account — no-op, just continue that session.
+//  2. It's already linked to a *different* account —
+//     ErrSocialIdentityLinkedElsewhere, not a silent switch. Before this,
+//     completing a social flow while signed in as A, that resolved to an
+//     unrelated account B, unconditionally overwrote the session cookie
+//     with B's — a curious click while signed in could silently switch
+//     the browser to someone else's account with no warning, and there
+//     was no way to add a second sign-in method to an existing account
+//     at all (a never-before-seen identity always resolved independently,
+//     by email or by creating a new account, never by linking to whatever
+//     session was already active).
+//  3. It isn't linked to anyone — link it to the *current* account
+//     directly. This is what actually enables "add Google as a second
+//     sign-in method": the currently-authenticated identity is
+//     authoritative, so a matching email on some other unrelated account
+//     is irrelevant here (unlike the anonymous path's case 2).
+func (s *Service) LoginOrCreateViaSocial(ctx context.Context, provider, providerUserID, email, currentUserID string) (*Session, error) {
+	var linkedUserID string
 	err := s.db.QueryRowContext(ctx, `
 		SELECT user_id FROM social_identities WHERE provider = ? AND provider_user_id = ?
-	`, provider, providerUserID).Scan(&userID)
-	if err == nil {
-		return s.createSession(ctx, userID)
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	`, provider, providerUserID).Scan(&linkedUserID)
+	switch {
+	case err == nil:
+		if currentUserID != "" && linkedUserID != currentUserID {
+			return nil, ErrSocialIdentityLinkedElsewhere
+		}
+		return s.createSession(ctx, linkedUserID)
+	case !errors.Is(err, sql.ErrNoRows):
 		return nil, fmt.Errorf("lookup social identity: %w", err)
 	}
 
+	// Not linked to anyone yet.
+	var userID string
 	email = normalizeEmail(email)
-	if email != "" {
-		err = s.db.QueryRowContext(ctx, `SELECT id FROM users WHERE email = ?`, email).Scan(&userID)
+	if currentUserID != "" {
+		userID = currentUserID
 	} else {
-		err = sql.ErrNoRows
-	}
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		userID, email, err = s.createUserForSocialSignIn(ctx, provider, providerUserID, email)
-		if err != nil {
-			return nil, err
+		if email != "" {
+			err = s.db.QueryRowContext(ctx, `SELECT id FROM users WHERE email = ?`, email).Scan(&userID)
+		} else {
+			err = sql.ErrNoRows
 		}
-	case err != nil:
-		return nil, fmt.Errorf("lookup user by email: %w", err)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			userID, email, err = s.createUserForSocialSignIn(ctx, provider, providerUserID, email)
+			if err != nil {
+				return nil, err
+			}
+		case err != nil:
+			return nil, fmt.Errorf("lookup user by email: %w", err)
+		}
 	}
 
-	// email is never "" here: either the lookup above only ran because
-	// it already wasn't, or createUserForSocialSignIn resolved it to a
-	// real or placeholder address.
+	// email is never "" here when currentUserID == "": either the lookup
+	// above only ran because it already wasn't, or createUserForSocialSignIn
+	// resolved it to a real or placeholder address. When currentUserID !=
+	// "", an empty email is stored as-is — it's just descriptive metadata
+	// on this link, not a lookup key, so there's no placeholder to invent.
 	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO social_identities (id, user_id, provider, provider_user_id, email) VALUES (?, ?, ?, ?, ?)
 	`, uuid.NewString(), userID, provider, providerUserID, email); err != nil {
@@ -456,10 +501,19 @@ func (s *Service) getUserByID(ctx context.Context, id string) (*User, error) {
 	return &u, nil
 }
 
+// normalizeEmail lowercases and trims email so "User@Example.com" and
+// "user@example.com " are treated as the same address everywhere: signup
+// uniqueness, login lookup, reset-token lookup, and social-login account
+// linking (a provider reporting a differently-cased email than the one a
+// password account originally signed up with must still resolve to the
+// same account — see spec/identity.md IDNT-14). Full RFC 5321 casing
+// rules (a mailbox's local-part is technically case-sensitive per spec,
+// though virtually no real provider treats it that way) aren't worth
+// implementing here since this only needs consistent uniqueness, not
+// mailbox routing. See migrations/0010_case_insensitive_email.sql for the
+// matching schema-level defense in depth.
 func normalizeEmail(email string) string {
-	// Minimal normalization for v1; full RFC 5321 casing rules aren't worth
-	// it here since we only need consistent uniqueness, not mailbox routing.
-	return email
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
 func randomToken(n int) (string, error) {

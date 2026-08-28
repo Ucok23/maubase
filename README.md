@@ -348,9 +348,16 @@ that provider's own sign-in page; `GET
 back to — on success this sets the same identity-layer session cookie
 `POST /api/auth/login` does and redirects to
 `MAUBASE_SOCIAL_LOGIN_REDIRECT_URL` (your own frontend, not a maubase
-page). A first-time identity creates an account (linking to an existing
-one by email if there's a match, rather than duplicating it); a
-returning one just signs in. `internal/social` is maubase acting as an
+page). Completed anonymously, a first-time identity creates an account
+(linking to an existing one by email if there's a match, rather than
+duplicating it); a returning one just signs in. Completed while
+already signed in, it's a "link a second sign-in method" request
+instead: a never-before-seen identity links to the *current* session's
+account (email-matching doesn't apply here — the active session is
+authoritative), and one already linked to a *different* account is
+refused (`409`) rather than silently swapping the session to it. See
+`spec/social-login.md` SOCIAL-09/10. `internal/social` is maubase
+acting as an
 OAuth *client* to Google/GitHub — the opposite direction from
 `internal/oauth`, which is maubase acting as an OAuth *authorization
 server* for third-party apps. See `spec/social-login.md`.
