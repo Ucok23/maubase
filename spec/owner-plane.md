@@ -184,6 +184,37 @@ lookup treatment `spec/identity.md` IDNT-14 describes for the customer
 plane, backed by the same kind of case-insensitive unique index at the
 schema level.
 
+## OWNR-21: An out-of-range or invalid limit/offset on the audit log is rejected, not silently substituted
+Given `GET /admin/audit-log`,
+when `limit`/`offset` are both omitted, the response uses the documented
+defaults exactly as before; but when `limit` or `offset` *is* given and
+is invalid — non-numeric, zero or negative for `limit`, negative for
+`offset`, or a `limit` over the stated maximum of 200 —
+then the response is `400` naming the problem, rather than silently
+substituting the default as if the parameter had been omitted — the
+same treatment `spec/auto-rest.md` REST-PAGINATION-01 gives
+`GET /api/data/{table}`, applied here for the same reason: an admin
+explicitly asking for more entries than the max used to silently get
+the default page back with no indication their request was truncated.
+
+## OWNR-22: Creating owner-plane accounts is refused one rung down from owner too
+Given a signed-in account with role `admin` — the rung immediately
+below `owner`, not the widest possible gap —
+when they attempt `POST /admin/owners`,
+then the response is `403`, same as OWNR-06 already establishes for
+`developer`/`viewer`. OWNR-06's own test only ever checked the widest
+gap (owner vs. developer); the adjacent rung is where a
+`role.AtLeast(...)` off-by-one would actually show up.
+
+## OWNR-23: Reading owner-plane accounts or the audit log is refused one rung down from admin too
+Given a signed-in account with role `developer` — the rung immediately
+below `admin`, not the widest possible gap —
+when they attempt `GET /admin/owners` or `GET /admin/audit-log`,
+then the response is `403` for both, same as OWNR-07/16 already
+establish for `viewer`. Both of those scenarios' own tests only ever
+checked the widest gap (admin/owner vs. viewer); the adjacent rung is
+where a `role.AtLeast(...)` off-by-one would actually show up.
+
 ## OWNR-24: An expired owner session is rejected
 Given an owner-plane session whose `expires_at` has already passed (but
 hasn't been purged yet — see `spec/maintenance.md`'s purge-sessions

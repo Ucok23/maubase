@@ -217,6 +217,48 @@ func TestPasswordReset_TokenRedeemableOnlyOnce(t *testing.T) {
 	}
 }
 
+// TestPasswordReset_ExpiredTokenRejected exercises PWRESET-06, which had
+// no test at all: there's no way to just wait out the real one-hour TTL
+// in a test, so this backdates the token's own expires_at via SQL Studio
+// (owner-plane, direct DB access) instead.
+func TestPasswordReset_ExpiredTokenRejected(t *testing.T) {
+	// PWRESET-06
+	sender := email.NewFakeSender()
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		EmailSender: sender,
+	})
+	signUp(t, newClient(t), baseURL, "pwreset06@example.com", "originalpassword1")
+
+	forgotPassword(t, newClient(t), baseURL, "pwreset06@example.com")
+	token := tokenFromResetLink(t, sender.Sent())
+
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	sqlResp, err := owner.PostForm(baseURL+"/admin/ui/sql", url.Values{
+		"query": {"UPDATE password_reset_tokens SET expires_at = '2000-01-01 00:00:00'"},
+	})
+	if err != nil {
+		t.Fatalf("backdate token via SQL Studio: %v", err)
+	}
+	if sqlResp.StatusCode != http.StatusOK {
+		t.Fatalf("SQL Studio update: want 200, got %d: %s", sqlResp.StatusCode, bodyString(t, sqlResp))
+	}
+
+	reset := resetPassword(t, baseURL, token, "wontworkanyway1")
+	if reset.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expired token: want 400, got %d: %s", reset.StatusCode, bodyString(t, reset))
+	}
+
+	// The password is genuinely unchanged.
+	login := postJSON(t, newClient(t), baseURL+"/api/auth/login", map[string]string{
+		"email": "pwreset06@example.com", "password": "originalpassword1",
+	})
+	if login.StatusCode != http.StatusOK {
+		t.Fatalf("login with the original password: want 200, got %d", login.StatusCode)
+	}
+}
+
 // TestPasswordReset_ConcurrentRedemptionOnlyOneWins is PWRESET-10: two
 // concurrent redemptions of the same still-valid token must not both
 // succeed. Before the fix, ResetPassword's initial SELECT ran outside

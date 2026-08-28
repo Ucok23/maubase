@@ -188,6 +188,56 @@ func TestOwner_ListingRequiresAtLeastAdmin(t *testing.T) {
 	}
 }
 
+// TestOwner_AdminCannotCreateAccountsEither exercises OWNR-22:
+// TestOwner_OnlyOwnerCanCreateAccounts (OWNR-06) only ever checked
+// owner (allow) against developer (deny) — the widest gap in the role
+// hierarchy, and the least likely place an off-by-one hides. admin is
+// the rung immediately adjacent to owner, and the one most likely to
+// have been accidentally let through by a `role.AtLeast(...)` typo.
+func TestOwner_AdminCannotCreateAccountsEither(t *testing.T) {
+	// OWNR-22
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	createOwner(t, owner, baseURL, "ownr22-admin@example.com", "correcthorse", "admin")
+
+	admin := newClient(t)
+	if resp := ownerLogin(t, admin, baseURL, "ownr22-admin@example.com", "correcthorse"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup: admin login failed: %d", resp.StatusCode)
+	}
+
+	denied := createOwner(t, admin, baseURL, "ownr22-blocked@example.com", "correcthorse", "viewer")
+	if denied.StatusCode != http.StatusForbidden {
+		t.Fatalf("want 403 for an admin-role account creating owners, got %d: %s", denied.StatusCode, bodyString(t, denied))
+	}
+}
+
+// TestOwner_DeveloperCannotListAccountsEither exercises the "GET
+// /admin/owners" half of OWNR-23: TestOwner_ListingRequiresAtLeastAdmin
+// (OWNR-07) only ever checked viewer, the rung furthest from the
+// admin+ boundary. developer sits directly adjacent to it — the
+// scenario a boundary-off-by-one would actually let through.
+func TestOwner_DeveloperCannotListAccountsEither(t *testing.T) {
+	// OWNR-23
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	createOwner(t, owner, baseURL, "ownr23-dev@example.com", "correcthorse", "developer")
+
+	dev := newClient(t)
+	if resp := ownerLogin(t, dev, baseURL, "ownr23-dev@example.com", "correcthorse"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup: developer login failed: %d", resp.StatusCode)
+	}
+
+	denied, err := dev.Get(baseURL + "/admin/owners")
+	if err != nil {
+		t.Fatalf("GET /admin/owners: %v", err)
+	}
+	if denied.StatusCode != http.StatusForbidden {
+		t.Fatalf("want 403 for a developer-role account listing owners, got %d: %s", denied.StatusCode, bodyString(t, denied))
+	}
+}
+
 func TestOwner_LastOwnerCannotBeDeleted(t *testing.T) {
 	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
 

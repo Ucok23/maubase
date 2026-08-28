@@ -1,7 +1,9 @@
 package e2e_test
 
 import (
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -319,4 +321,263 @@ func TestRealtime_DeniedReadProducesNoEvents(t *testing.T) {
 	// ...but nobody is authorized to read this collection at all, so no
 	// subscriber — including its own creator — is notified of it either.
 	expectNoEvent(t, rc)
+}
+
+func TestRealtime_AccountErasureDeliversDeletedEventBeforeRevokingItsOwnToken(t *testing.T) {
+	// RT-10
+	baseURL := testserver.NewWithSchema(t, notesSchema)
+	client := newClient(t)
+	signUp(t, client, baseURL, "rt-erasure@example.com", "correcthorse")
+	token := restTokenForClient(t, baseURL, client)
+
+	rc := connectRealtime(t, baseURL, token)
+	subscribe(t, rc, "notes")
+
+	createResp := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", token, map[string]any{"title": "will be erased", "body": "x"})
+	created := decodeJSONMap(t, createResp)
+	id, _ := created["id"].(string)
+	readEvent(t, rc) // drain "created"
+
+	del, err := client.Do(mustRequest(t, http.MethodDelete, baseURL+"/api/auth/me"))
+	if err != nil {
+		t.Fatalf("DELETE /api/auth/me: %v", err)
+	}
+	if del.StatusCode != http.StatusNoContent {
+		t.Fatalf("want 204, got %d: %s", del.StatusCode, bodyString(t, del))
+	}
+
+	// RT-04's guarantee extends to account erasure's cascading delete
+	// (spec/identity.md IDNT-10): the already-open subscription still
+	// receives the deleted event for the row it just lost, even though
+	// the very access token it authenticated with is revoked moments
+	// later in that same request — a WebSocket connection's token is
+	// checked once at the handshake, never per message.
+	ev := readEvent(t, rc)
+	if ev.Type != "deleted" || ev.Collection != "notes" || ev.ID != id {
+		t.Fatalf("want a deleted/notes event for the erased account's row, got %+v", ev)
+	}
+
+	// The token is now genuinely revoked: a *new* connection attempt
+	// with it is rejected outright, same as RT-01 for any invalid
+	// token — the already-open connection above got its event because
+	// it predates the revocation, not because the token still works.
+	if conn, status := dialRealtime(t, baseURL, token); status != http.StatusUnauthorized {
+		if conn != nil {
+			conn.Close()
+		}
+		t.Fatalf("reconnect with the erased account's token: want 401, got %d", status)
+	}
+}
+
+func TestRealtime_AdminUIDataBrowserWritesPublish(t *testing.T) {
+	// RT-11
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		Schema: []string{notesSchema},
+	})
+	token := restToken(t, baseURL, "rt-adminui@example.com", []string{"records:read", "records:write"})
+
+	// The customer creates their own row first, so the admin's writes
+	// below (which set owner_id explicitly rather than auto-stamping it,
+	// per ADMINUI-13) target a real subject rather than a guess.
+	createResp := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", token, map[string]any{"title": "before", "body": "x"})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create note: want 201, got %d: %s", createResp.StatusCode, bodyString(t, createResp))
+	}
+	created := decodeJSONMap(t, createResp)
+	id, _ := created["id"].(string)
+	ownerID, _ := created["owner_id"].(string)
+
+	rc := connectRealtime(t, baseURL, token)
+	subscribe(t, rc, "notes")
+
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	// The data browser's own create publishes too — a fresh row, same
+	// owner_id, since AdminCreateRow uses the submitted owner_id as-is.
+	if _, err := owner.PostForm(baseURL+"/admin/ui/data/notes", url.Values{
+		"title": {"admin-created"}, "body": {"x"}, "owner_id": {ownerID},
+	}); err != nil {
+		t.Fatalf("admin create: %v", err)
+	}
+	ev := readEvent(t, rc)
+	if ev.Type != "created" || ev.Collection != "notes" || ev.Record["title"] != "admin-created" {
+		t.Fatalf("want a created/notes event from the admin's own create, got %+v", ev)
+	}
+
+	// The data browser's edit.
+	updResp, err := owner.PostForm(baseURL+"/admin/ui/data/notes/"+id, url.Values{
+		"title": {"edited-by-admin"}, "body": {"x"}, "owner_id": {ownerID},
+	})
+	if err != nil {
+		t.Fatalf("admin update: %v", err)
+	}
+	if updResp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("admin update: want 303, got %d: %s", updResp.StatusCode, bodyString(t, updResp))
+	}
+	ev = readEvent(t, rc)
+	if ev.Type != "updated" || ev.Collection != "notes" || ev.Record["title"] != "edited-by-admin" {
+		t.Fatalf("want an updated/notes event from the admin's own edit, got %+v", ev)
+	}
+
+	// The data browser's delete.
+	delResp, err := owner.PostForm(baseURL+"/admin/ui/data/notes/"+id+"/delete", nil)
+	if err != nil {
+		t.Fatalf("admin delete: %v", err)
+	}
+	if delResp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("admin delete: want 303, got %d: %s", delResp.StatusCode, bodyString(t, delResp))
+	}
+	ev = readEvent(t, rc)
+	if ev.Type != "deleted" || ev.Collection != "notes" || ev.ID != id {
+		t.Fatalf("want a deleted/notes event from the admin's own delete, got %+v", ev)
+	}
+}
+
+func TestRealtime_SQLStudioWritesDoNotPublish(t *testing.T) {
+	// RT-11's carve-out: SQL Studio's raw SQL isn't parsed to figure out
+	// which collection/row it touched, so it never publishes — the write
+	// still lands (confirmed via the admin's own subsequent GET) and is
+	// still audit-logged (ADMINUI-20), just not pushed live.
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		Schema: []string{notesSchema},
+	})
+	token := restToken(t, baseURL, "rt-sqlstudio@example.com", []string{"records:read", "records:write"})
+	createResp := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", token, map[string]any{"title": "before", "body": "x"})
+	created := decodeJSONMap(t, createResp)
+	ownerID, _ := created["owner_id"].(string)
+
+	rc := connectRealtime(t, baseURL, token)
+	subscribe(t, rc, "notes")
+
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	query := fmt.Sprintf("INSERT INTO notes (id, owner_id, title, body) VALUES ('sql-studio-row', '%s', 'via-sql', 'x')", ownerID)
+	sqlResp, err := owner.PostForm(baseURL+"/admin/ui/sql", url.Values{"query": {query}})
+	if err != nil {
+		t.Fatalf("sql studio insert: %v", err)
+	}
+	if sqlResp.StatusCode != http.StatusOK {
+		t.Fatalf("sql studio insert: want 200, got %d: %s", sqlResp.StatusCode, bodyString(t, sqlResp))
+	}
+
+	rowsBody := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes"))
+	if !strings.Contains(rowsBody, "via-sql") {
+		t.Fatalf("setup: want the SQL Studio insert to have actually landed, got: %s", rowsBody)
+	}
+	expectNoEvent(t, rc)
+}
+
+// TestRealtime_SlowSubscriberIsIsolatedAndDoesNotStallWrites exercises
+// RT-12: Broker.publishLocal's per-subscriber send is a non-blocking
+// `select { case c.events <- ev: default: }` into a 16-slot channel, so
+// a subscriber that stops reading should simply miss events past
+// capacity while an unrelated fast subscriber keeps receiving
+// everything, and critically neither subscriber's speed should affect
+// how quickly the writes that triggered those events complete. This was
+// asserted by code inspection only, never actually tested.
+//
+// To force genuine backpressure reliably (not just "eventually,
+// depending on this machine's OS socket buffer sizes"), each written
+// record carries a 100KB field: at 200 unread events that's ~20MB
+// backlogged for the slow subscriber, comfortably past any realistic
+// combination of the 16-slot channel, gorilla/websocket's 4KB write
+// buffer, and OS-level socket buffers — so the drop is forced by
+// payload volume, not by racing a timer against however big this
+// particular environment's buffers happen to be.
+func TestRealtime_SlowSubscriberIsIsolatedAndDoesNotStallWrites(t *testing.T) {
+	// RT-12
+	baseURL := testserver.NewWithSchema(t, tagsSchema) // no owner_id: ownerID "" reaches every subscriber
+	tokenFast := restToken(t, baseURL, "rt-backpressure-fast@example.com", []string{"records:read", "records:write"})
+	tokenSlow := restToken(t, baseURL, "rt-backpressure-slow@example.com", []string{"records:read", "records:write"})
+
+	const n = 200
+	largeValue := strings.Repeat("x", 100*1024)
+
+	fast := connectRealtime(t, baseURL, tokenFast)
+	subscribe(t, fast, "tags")
+
+	// Drain the fast subscriber concurrently with the writes below, not
+	// after they all complete: realtimeClient's own events channel is
+	// itself only 16-slots deep (see its doc comment), so reading it
+	// only afterward would make "fast" just as backlogged as the
+	// deliberately-slow subscriber, defeating the point of the
+	// comparison.
+	fastCount := 0
+	fastDone := make(chan struct{})
+	go func() {
+		defer close(fastDone)
+		for i := 0; i < n; i++ {
+			select {
+			case _, ok := <-fast.events:
+				if !ok {
+					return
+				}
+				fastCount++
+			case <-time.After(15 * time.Second):
+				return
+			}
+		}
+	}()
+
+	// The slow subscriber: dial directly (not via connectRealtime, which
+	// starts a draining goroutine) and never read from it at all until
+	// every write below has already completed — "stops reading until
+	// its buffer is full."
+	slowConn, status := dialRealtime(t, baseURL, tokenSlow)
+	if slowConn == nil {
+		t.Fatalf("connect slow subscriber: want a successful upgrade, got status %d", status)
+	}
+	defer slowConn.Close()
+	if err := slowConn.WriteJSON(map[string]string{"type": "subscribe", "collection": "tags"}); err != nil {
+		t.Fatalf("subscribe (slow): %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	writeStart := time.Now()
+	for i := 0; i < n; i++ {
+		resp := doAuthed(t, http.MethodPost, baseURL+"/api/data/tags", tokenFast, map[string]any{"name": largeValue})
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("create %d: want 201, got %d", i, resp.StatusCode)
+		}
+	}
+	writeElapsed := time.Since(writeStart)
+
+	// None of the writes waited on the slow subscriber's backlog —
+	// Broker.publishLocal's non-blocking send means the write path
+	// never blocks on a subscriber's channel or socket, regardless of
+	// how far behind that subscriber is.
+	if writeElapsed > 10*time.Second {
+		t.Fatalf("want %d writes to complete quickly despite an unread slow subscriber, took %s", n, writeElapsed)
+	}
+
+	// The fast subscriber (drained concurrently above) received every
+	// single event.
+	<-fastDone
+	if fastCount != n {
+		t.Fatalf("want the fast subscriber to receive all %d events, got %d", n, fastCount)
+	}
+
+	// The slow subscriber, drained only now that every write is done, got
+	// at least something (a healthy connection isn't starved outright)
+	// but strictly fewer than n — some were dropped once its buffer
+	// filled, per the documented at-most-once/may-drop behavior.
+	slowCount := 0
+	_ = slowConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	for {
+		var ev realtimeEvent
+		if err := slowConn.ReadJSON(&ev); err != nil {
+			break
+		}
+		slowCount++
+	}
+	if slowCount == 0 {
+		t.Fatalf("want the slow subscriber to have received at least some events, got 0")
+	}
+	if slowCount >= n {
+		t.Fatalf("want the slow subscriber to have missed at least some of the %d events (backpressure), got all %d", n, slowCount)
+	}
 }
