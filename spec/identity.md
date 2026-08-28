@@ -86,3 +86,21 @@ then that access token no longer works against any protected resource
 (a subsequent request using it gets `401`), even though it hasn't
 naturally expired — deleting the account revokes every outstanding grant
 issued to any client for that user, not just the identity-layer session.
+
+## IDNT-14: Email matching is case-insensitive everywhere
+Given an account signed up as `Jane.Doe@Example.com`,
+when someone `POST`s `/api/auth/signup` with `jane.doe@example.com` (or
+any other casing of the same address),
+then the response is `409` (`email already taken`), not a second
+account — signup uniqueness, login lookup, and password-reset-token
+lookup all treat email as case-insensitive (normalized to lowercase +
+trimmed before every write and lookup), and a case-insensitive unique
+index backs this at the schema level too, independent of any single
+code path remembering to normalize.
+Given that same account,
+when a social-login provider later reports `jane.doe@example.com` for
+an identity that's never signed in here before (SOCIAL-02's "matching
+email links to the existing account" case),
+then it links to the existing account rather than silently creating an
+unrelated new one — the exact-string mismatch a case-sensitive lookup
+would produce is exactly what used to defeat this.

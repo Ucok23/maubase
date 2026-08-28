@@ -56,6 +56,16 @@ type Options struct {
 	// config.Load".
 	MaxUploadBytes int64
 
+	// StorageBackend overrides the storage.Backend files are read/written
+	// through — nil (the default) builds a real storage.NewLocalBackend
+	// under a fresh t.TempDir(). A test exercising a backend failure
+	// (STOR-13's partial-DeleteOwned-failure case) supplies its own
+	// storage.Backend implementation here, the same pattern
+	// Options.Relay/EmailSender/SocialProviders already use for
+	// injecting a test double at the same seam a real deployment would
+	// configure.
+	StorageBackend storage.Backend
+
 	// MaxRequestBodyBytes caps a single /api/data/* create/update request
 	// body (see internal/restapi). Zero means "use the same 1MB default
 	// as config.Load".
@@ -215,9 +225,13 @@ func newCustom(t *testing.T, opts Options) (string, error) {
 	}
 	restapiSvc := restapi.NewServer(sqlDB, registry, oauthSvc, broker, maxRequestBodyBytes)
 
-	storageBackend, err := storage.NewLocalBackend(filepath.Join(t.TempDir(), "storage"))
-	if err != nil {
-		t.Fatalf("init storage backend: %v", err)
+	storageBackend := opts.StorageBackend
+	if storageBackend == nil {
+		var err error
+		storageBackend, err = storage.NewLocalBackend(filepath.Join(t.TempDir(), "storage"))
+		if err != nil {
+			t.Fatalf("init storage backend: %v", err)
+		}
 	}
 	maxUploadBytes := opts.MaxUploadBytes
 	if maxUploadBytes == 0 {

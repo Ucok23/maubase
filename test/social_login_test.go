@@ -149,6 +149,28 @@ func TestSocialLogin_MatchingEmailLinksToExistingAccountInsteadOfDuplicating(t *
 	}
 }
 
+func TestSocialLogin_MatchingEmailLinksCaseInsensitively(t *testing.T) {
+	// SOCIAL-08 / spec/identity.md IDNT-14
+	provider := fakeGoogleProvider(t, "google-uid-caseinsensitive", "differently.cased@example.com")
+	baseURL := testserver.NewCustom(t, testserver.Options{SocialProviders: map[string]social.Provider{"google": provider}})
+
+	// The password account signed up with different casing than what the
+	// provider will report.
+	passwordClient := newClient(t)
+	signUp(t, passwordClient, baseURL, "Differently.Cased@Example.com", "originalpassword1")
+	existingMe := decodeJSONMap(t, mustGet(t, passwordClient, baseURL+"/api/auth/me"))
+	existingID, _ := existingMe["id"].(string)
+
+	socialClient := newClient(t)
+	state := startSocialLogin(t, socialClient, baseURL, "google")
+	socialCallback(t, socialClient, baseURL, "google", "fake-code", state)
+
+	socialMe := decodeJSONMap(t, mustGet(t, socialClient, baseURL+"/api/auth/me"))
+	if socialMe["id"] != existingID {
+		t.Fatalf("want the social sign-in to link to the existing account (id %v) despite the casing difference, got a different one: %v", existingID, socialMe)
+	}
+}
+
 func TestSocialLogin_ReturningIdentitySignsIntoTheSameAccountAgain(t *testing.T) {
 	// SOCIAL-03
 	provider := fakeGoogleProvider(t, "google-uid-3", "social03@example.com")
