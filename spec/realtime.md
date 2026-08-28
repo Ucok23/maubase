@@ -121,6 +121,21 @@ had happened on process B itself. Without `MAUBASE_REDIS_URL` set
 (`Broker`'s default, `NewBroker`), this does not hold — see the note
 above.
 
+## RT-12: A slow subscriber is isolated: it may miss events, but never slows down the writes that produced them
+Given two connections subscribed to the same collection, one of which
+stops reading its socket entirely while the other keeps reading
+normally, and a burst of writes to that collection in quick succession,
+then the reading connection receives every one of those events, while
+the non-reading one may miss some once its 16-slot per-connection
+buffer (`Broker.NewConn`) fills — the documented at-most-once/may-drop
+behavior above, not a bug — but critically, none of the writes that
+triggered those events are slowed down by the non-reading connection's
+backlog: `Broker.publishLocal` holds its mutex only long enough to copy
+out the current subscriber list, then sends to each with a non-blocking
+`select`/`default`, so one slow subscriber's full channel (or, upstream
+of that, an OS socket buffer it isn't draining) can never make a write
+wait on it.
+
 ## Known limitation: cross-process policy-change skew (multi-process only)
 
 Each maubase process holds its own independently-`Discover()`'d
