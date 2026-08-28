@@ -456,10 +456,19 @@ func (s *Service) getUserByID(ctx context.Context, id string) (*User, error) {
 	return &u, nil
 }
 
+// normalizeEmail lowercases and trims email so "User@Example.com" and
+// "user@example.com " are treated as the same address everywhere: signup
+// uniqueness, login lookup, reset-token lookup, and social-login account
+// linking (a provider reporting a differently-cased email than the one a
+// password account originally signed up with must still resolve to the
+// same account — see spec/identity.md IDNT-14). Full RFC 5321 casing
+// rules (a mailbox's local-part is technically case-sensitive per spec,
+// though virtually no real provider treats it that way) aren't worth
+// implementing here since this only needs consistent uniqueness, not
+// mailbox routing. See migrations/0010_case_insensitive_email.sql for the
+// matching schema-level defense in depth.
 func normalizeEmail(email string) string {
-	// Minimal normalization for v1; full RFC 5321 casing rules aren't worth
-	// it here since we only need consistent uniqueness, not mailbox routing.
-	return email
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
 func randomToken(n int) (string, error) {
