@@ -104,3 +104,36 @@ email links to the existing account" case),
 then it links to the existing account rather than silently creating an
 unrelated new one — the exact-string mismatch a case-sensitive lookup
 would produce is exactly what used to defeat this.
+
+## IDNT-16: Concurrent duplicate signups for the same email only let one through
+Given no account yet exists for a given email,
+when several `POST /api/auth/signup` requests for that exact same email
+arrive concurrently (not sequentially),
+then exactly one succeeds (`201`) and every other one gets `409` — the
+same "already taken" response a second, later signup gets normally.
+`SignUp` relies on the `users.email` unique index rejecting every insert
+but the first, rather than a check-then-insert (which a future
+"optimization" could silently reintroduce a race into) — this holds even
+when every request starts before any of them has committed.
+
+## IDNT-17: A concurrent export during account erasure never corrupts data or 500s
+Given a signed-in user with rows in an owner-scoped collection,
+when `GET /api/auth/me/export` and `DELETE /api/auth/me` are in flight
+at the same time for that same account,
+then the delete always succeeds (`204`) regardless, and the concurrent
+export either succeeds (`200`, with a snapshot of whichever collections
+hadn't been erased yet by the time each one was read — anywhere from all
+of them to none) or gets `401` (if the session was already revoked by
+the time the export's own lookup ran) — never a `500`. Every row that
+does appear in that snapshot is a complete, real record: `DeleteOwned`'s
+per-collection deletes and `ExportOwned`'s per-collection reads are each
+one atomic SQL statement, so a collection is never observed half-deleted
+— only ever entirely-still-there or entirely-gone. `handleDeleteAccount`
+is explicitly not wrapped in a transaction (application data, storage,
+OAuth grants, then the account itself, as separate steps — see its own
+doc comment), so a racing export genuinely can see partially-erased
+state with nothing in the response distinguishing that from a complete,
+uncontested one; that's accepted as-is, not fixed here — a real fix
+means a transaction spanning auto-REST, storage, and OAuth grants
+together, a bigger change than this gap's severity has warranted so
+far.
