@@ -317,8 +317,17 @@ func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword strin
 	if _, err := tx.ExecContext(ctx, `UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, hash, userID); err != nil {
 		return "", fmt.Errorf("update password: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = ?`, id); err != nil {
-		return "", fmt.Errorf("mark reset token used: %w", err)
+	// Marks every outstanding token for this user as used, not just the
+	// one just redeemed: a second forgot-password request before the
+	// first is ever used leaves two valid tokens outstanding, and an old
+	// one resurfacing later (a mail archive, a previously-compromised-
+	// then-resecured inbox) could otherwise still reset the password
+	// within its own hour-long window, even after the account's owner
+	// believes it's fully re-secured. See PWRESET-12.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = ? AND used_at IS NULL
+	`, userID); err != nil {
+		return "", fmt.Errorf("mark reset tokens used: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID); err != nil {
 		return "", fmt.Errorf("revoke sessions: %w", err)
