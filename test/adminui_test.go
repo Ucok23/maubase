@@ -586,6 +586,28 @@ func TestAdminUI_SQLStudioAuditsEveryRun(t *testing.T) {
 	}
 }
 
+func TestAdminUI_AuditLogPageRendersMetadata(t *testing.T) {
+	// ADMINUI-37
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	// sql_executed: the query text is the metadata.
+	const distinctiveQuery = "select 1 as adminui37marker"
+	owner.PostForm(baseURL+"/admin/ui/sql", url.Values{"query": {distinctiveQuery}})
+
+	// owner_create: the role is the metadata.
+	createOwner(t, owner, baseURL, "adminui37-viewer@example.com", "viewerpassword1", "viewer")
+
+	body := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/audit-log"))
+	if !strings.Contains(body, distinctiveQuery) {
+		t.Fatalf("want the executed SQL text visible on the audit log page, got: %s", body)
+	}
+	if !strings.Contains(body, "role: viewer") {
+		t.Fatalf("want the created account's role visible on the audit log page, got: %s", body)
+	}
+}
+
 // TestAdminUI_AuditWriteFailureIsLoggedNotSilentlyDropped: audit.Log.
 // RecordLogged (what every owner-plane handler now calls, instead of the
 // old `_ = s.audit.Record(...)` that silently discarded a write failure —

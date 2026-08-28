@@ -2,7 +2,7 @@
 {{if .Entries}}
 <div class="table-wrap">
 <table class="data-table">
-<thead><tr><th>When</th><th>Event</th><th>Actor</th><th>Target</th></tr></thead>
+<thead><tr><th>When</th><th>Event</th><th>Actor</th><th>Target</th><th>Details</th></tr></thead>
 <tbody>
 {{range .Entries}}
 <tr>
@@ -10,6 +10,7 @@
 <td><span class="badge badge-developer">{{.Event}}</span></td>
 <td>{{.ActorEmail}}</td>
 <td>{{.TargetEmail}}</td>
+<td>{{range $key, $value := .Metadata}}<code>{{$key}}: {{$value}}</code> {{end}}</td>
 </tr>
 {{end}}
 </tbody>

@@ -413,3 +413,15 @@ not just the one combination ADMINUI-31 happens to check on its way to
 asserting the sidebar's own contents — including the owner-only delete
 action specifically, which no other test exercises via direct
 navigation (only its create counterpart, ADMINUI-07, does).
+
+## ADMINUI-37: The audit log page renders each entry's metadata
+Given an audit-log entry that carries metadata — the SQL text for
+`sql_executed`, the role an account was created/removed with for
+`owner_create`/`owner_delete`, the revoked-session count for
+`user_sessions_revoked` — every one of these already captured per
+ADMINUI-20/OWNR-14/15,
+when an admin+ owner visits `/admin/ui/audit-log`,
+then that metadata is visible on the page, not just retrievable via
+`GET /admin/audit-log`'s JSON API — an admin using the actual product
+surface can see what SQL an owner ran, or what role an account was
+created with, without hand-crafting a JSON request.
