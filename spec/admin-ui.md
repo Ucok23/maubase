@@ -441,6 +441,24 @@ then that metadata is visible on the page, not just retrievable via
 surface can see what SQL an owner ran, or what role an account was
 created with, without hand-crafting a JSON request.
 
+## ADMINUI-38: An edit form can set a field to NULL, and shows when it already is
+Given an existing row with a nullable column currently set to a real
+value,
+when a developer+ owner opens its edit form,
+then that field's text input is pre-filled with the current value, and
+a "Set to NULL" checkbox next to it is unchecked.
+When they check that box and save (regardless of whatever the text
+input still holds — the checkbox overrides it),
+then the field is stored as SQL `NULL`, not an empty string — the data
+browser's NULL-vs-empty-string distinction (ADMINUI-32) extends to
+actually *setting* NULL from the edit view, not just displaying a NULL
+that arrived some other way.
+Given a row whose nullable column is already `NULL`,
+when its edit form is opened again,
+then the checkbox is shown already checked and the text input empty —
+an admin can tell they're looking at a NULL field before touching
+anything, rather than a field that just happens to be blank.
+
 ## ADMINUI-39: Concurrent edits to the same row silently last-write-wins
 Given a row two developer+ owners are both editing (support work on the
 same customer's data, say — the data browser has no lock or lease

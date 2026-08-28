@@ -1101,6 +1101,58 @@ func TestAdminUI_NullColumnShownDistinctlyFromEmptyString(t *testing.T) {
 	}
 }
 
+func TestAdminUI_EditFormCanSetAndShowsNULL(t *testing.T) {
+	// ADMINUI-38
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		Schema: []string{notesSchema},
+	})
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	if _, err := owner.PostForm(baseURL+"/admin/ui/data/notes", url.Values{
+		"title": {"has a body"}, "body": {"real value"}, "owner_id": {"user-a"},
+	}); err != nil {
+		t.Fatalf("create row: %v", err)
+	}
+	rowsAfterCreate := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes"))
+	id := idFromRowHTML(t, rowsAfterCreate, "has a body")
+
+	// The edit form shows the current value and an unchecked NULL box.
+	editPage := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes/"+id+"/edit"))
+	if !strings.Contains(editPage, `value="real value"`) {
+		t.Fatalf("want the current value pre-filled, got: %s", editPage)
+	}
+	if !strings.Contains(editPage, `name="body__null" value="1">`) {
+		t.Fatalf("want an (unchecked) NULL checkbox for the nullable body field, got: %s", editPage)
+	}
+	if strings.Contains(editPage, `name="body__null" value="1" checked`) {
+		t.Fatalf("want the NULL checkbox unchecked for a non-NULL field, got: %s", editPage)
+	}
+
+	// Checking it (regardless of the text field) sets the column to NULL.
+	updateResp, err := owner.PostForm(baseURL+"/admin/ui/data/notes/"+id, url.Values{
+		"title": {"has a body"}, "body": {"ignored because __null is set"}, "body__null": {"1"},
+	})
+	if err != nil {
+		t.Fatalf("update row: %v", err)
+	}
+	if updateResp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("update: want 303, got %d: %s", updateResp.StatusCode, bodyString(t, updateResp))
+	}
+
+	rowsBody := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes"))
+	if !strings.Contains(rowsBody, `class="null-cell"`) {
+		t.Fatalf("want the field now shown as NULL in the data browser, got: %s", rowsBody)
+	}
+
+	// Re-opening the edit form now shows the checkbox pre-checked.
+	editAgain := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes/"+id+"/edit"))
+	if !strings.Contains(editAgain, `name="body__null" value="1" checked`) {
+		t.Fatalf("want the NULL checkbox pre-checked for an already-NULL field, got: %s", editAgain)
+	}
+}
+
 func TestAdminUI_SortsRowsByColumn(t *testing.T) {
 	// ADMINUI-33
 	baseURL := testserver.NewCustom(t, testserver.Options{
