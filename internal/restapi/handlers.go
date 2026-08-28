@@ -131,7 +131,11 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeOp(w, col.ReadRule) {
 		return
 	}
-	limit, offset := parsePagination(r)
+	limit, offset, err := parsePagination(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	query := fmt.Sprintf("SELECT * FROM %s", quoteIdent(col.Name))
 	var args []any
@@ -625,19 +629,36 @@ func (s *Server) decodeBody(w http.ResponseWriter, r *http.Request, col *Collect
 	return body, true
 }
 
-func parsePagination(r *http.Request) (limit, offset int) {
+// parsePagination reads limit/offset from the query string. Absent
+// params silently default (limit to defaultLimit, offset to 0) — that's
+// "unset," not invalid, and asking for it is the common case. But a
+// param that *is* present and out of range (non-numeric, non-positive,
+// or over maxLimit for limit; non-numeric or negative for offset)
+// returns an error rather than being silently treated the same as
+// absent: a caller explicitly asking for limit=999999 or limit=201 (over
+// a stated max of 200) got the *default* back with no indication
+// anything was truncated, easy to mistake for "that's everything there
+// is" (spec/auto-rest.md REST-PAGINATION-01/02).
+func parsePagination(r *http.Request) (limit, offset int, err error) {
 	limit, offset = defaultLimit, 0
 	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= maxLimit {
-			limit = n
+		n, convErr := strconv.Atoi(v)
+		if convErr != nil || n <= 0 {
+			return 0, 0, fmt.Errorf("limit must be a positive integer, got %q", v)
 		}
+		if n > maxLimit {
+			return 0, 0, fmt.Errorf("limit must not exceed %d, got %d", maxLimit, n)
+		}
+		limit = n
 	}
 	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			offset = n
+		n, convErr := strconv.Atoi(v)
+		if convErr != nil || n < 0 {
+			return 0, 0, fmt.Errorf("offset must be a non-negative integer, got %q", v)
 		}
+		offset = n
 	}
-	return limit, offset
+	return limit, offset, nil
 }
 
 // subject returns the access token's subject (user id), set by

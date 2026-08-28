@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"embed"
 	"errors"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"net"
@@ -334,7 +335,11 @@ func (s *Server) renderOwnersWithError(w http.ResponseWriter, r *http.Request, a
 
 func (s *Server) handleUsersPage(w http.ResponseWriter, r *http.Request) {
 	owner := ownerFromContext(r.Context())
-	limit, offset := parsePagination(r)
+	limit, offset, err := parsePagination(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	users, err := s.auth.ListUsers(r.Context(), limit, offset)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -353,7 +358,16 @@ func (s *Server) handleUsersPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderUsersWithError(w http.ResponseWriter, r *http.Request, owner *ownerauth.Owner, errMsg string) {
-	limit, offset := parsePagination(r)
+	// A pagination error here falls back to the default page rather than
+	// replacing errMsg: this re-render exists to surface a failed
+	// create-user submission, and that POST's URL doesn't carry
+	// limit/offset from the browser in the first place — the caller's
+	// actual error takes priority over a query-string edge case that
+	// isn't what they're here to see.
+	limit, offset, err := parsePagination(r)
+	if err != nil {
+		limit, offset = defaultLimit, 0
+	}
 	users, _ := s.auth.ListUsers(r.Context(), limit, offset)
 	total, _ := s.auth.CountUsers(r.Context())
 	render(w, "users", map[string]any{
@@ -464,7 +478,11 @@ func (s *Server) handleRevokeUserSessions(w http.ResponseWriter, r *http.Request
 // --- audit log ------------------------------------------------------------
 
 func (s *Server) handleAuditLogPage(w http.ResponseWriter, r *http.Request) {
-	limit, offset := parsePagination(r)
+	limit, offset, err := parsePagination(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	entries, err := s.audit.List(r.Context(), limit, offset)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -525,7 +543,11 @@ func (s *Server) handleDataRows(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	limit, offset := parsePagination(r)
+	limit, offset, err := parsePagination(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	sortCol, sortDir := r.URL.Query().Get("sort"), r.URL.Query().Get("dir")
 	rows, err := s.restapi.AdminListRows(r.Context(), col, limit, offset, sortCol, sortDir)
 	if err != nil {
@@ -917,17 +939,28 @@ func render(w http.ResponseWriter, name string, data map[string]any) {
 	}
 }
 
-func parsePagination(r *http.Request) (limit, offset int) {
+// parsePagination mirrors internal/restapi's function of the same name
+// (see its doc comment there): absent limit/offset silently default, but
+// a param that's present and out of range is an error, not a silent
+// fallback to the default.
+func parsePagination(r *http.Request) (limit, offset int, err error) {
 	limit, offset = defaultLimit, 0
 	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= maxLimit {
-			limit = n
+		n, convErr := strconv.Atoi(v)
+		if convErr != nil || n <= 0 {
+			return 0, 0, fmt.Errorf("limit must be a positive integer, got %q", v)
 		}
+		if n > maxLimit {
+			return 0, 0, fmt.Errorf("limit must not exceed %d, got %d", maxLimit, n)
+		}
+		limit = n
 	}
 	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			offset = n
+		n, convErr := strconv.Atoi(v)
+		if convErr != nil || n < 0 {
+			return 0, 0, fmt.Errorf("offset must be a non-negative integer, got %q", v)
 		}
+		offset = n
 	}
-	return limit, offset
+	return limit, offset, nil
 }

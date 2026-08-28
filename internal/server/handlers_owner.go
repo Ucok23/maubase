@@ -7,6 +7,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -118,7 +119,11 @@ func (s *Server) handleDeleteOwner(w http.ResponseWriter, r *http.Request) {
 
 // handleListAuditLog returns audit entries newest-first, paginated.
 func (s *Server) handleListAuditLog(w http.ResponseWriter, r *http.Request) {
-	limit, offset := parseAuditPagination(r)
+	limit, offset, err := parseAuditPagination(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	entries, err := s.audit.List(r.Context(), limit, offset)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -145,19 +150,30 @@ const (
 	auditMaxLimit     = 200
 )
 
-func parseAuditPagination(r *http.Request) (limit, offset int) {
+// parseAuditPagination mirrors internal/restapi's parsePagination exactly
+// (see its doc comment): absent limit/offset silently default, but a
+// param that's present and out of range is an error, not a silent
+// fallback to the default.
+func parseAuditPagination(r *http.Request) (limit, offset int, err error) {
 	limit, offset = auditDefaultLimit, 0
 	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= auditMaxLimit {
-			limit = n
+		n, convErr := strconv.Atoi(v)
+		if convErr != nil || n <= 0 {
+			return 0, 0, fmt.Errorf("limit must be a positive integer, got %q", v)
 		}
+		if n > auditMaxLimit {
+			return 0, 0, fmt.Errorf("limit must not exceed %d, got %d", auditMaxLimit, n)
+		}
+		limit = n
 	}
 	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			offset = n
+		n, convErr := strconv.Atoi(v)
+		if convErr != nil || n < 0 {
+			return 0, 0, fmt.Errorf("offset must be a non-negative integer, got %q", v)
 		}
+		offset = n
 	}
-	return limit, offset
+	return limit, offset, nil
 }
 
 // requireOwnerRole authenticates the owner-plane session cookie and

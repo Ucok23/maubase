@@ -476,3 +476,17 @@ this from an uncontested edit. `AdminUpdateRow` writes a bare
 optimistic concurrency (a version or `updated_at` check) is future
 scope if two-editors-at-once support work turns out to be common
 enough to need it.
+
+## ADMINUI-41: An out-of-range or invalid limit/offset is rejected, not silently substituted
+Given `/admin/ui/users` or `/admin/ui/data/{collection}`,
+when `limit`/`offset` are both omitted, the page renders with the
+documented defaults exactly as before; but when `limit` or `offset` *is*
+given in the query string and is invalid — non-numeric, zero or negative
+for `limit`, negative for `offset`, or a `limit` over the stated maximum
+of 200 (a hand-edited URL, since the page's own "Older →"/"← Newer"
+links never generate one) —
+then the response is `400` with a plain-text error naming the problem,
+rather than silently substituting the default as if the parameter had
+been omitted — the same treatment `spec/auto-rest.md`
+REST-PAGINATION-01 and `spec/owner-plane.md` OWNR-21 give their own
+paginated endpoints.

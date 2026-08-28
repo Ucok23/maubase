@@ -112,3 +112,21 @@ then the response is `400` naming that field — no SQLite column type
 can ever bind a nested structure, so this is caught before the query is
 even built rather than surfacing as an opaque `500` from the database
 driver.
+
+## REST-PAGINATION-01: An out-of-range or invalid limit/offset is rejected, not silently substituted
+Given `GET /api/data/{table}`,
+when `limit`/`offset` are both omitted,
+then the response uses the documented defaults (`limit=50`) exactly as
+before — this is the common case, and omitting them is not an error.
+But when `limit` or `offset` *is* given and is invalid — non-numeric,
+zero or negative for `limit`, negative for `offset`, or a `limit` over
+the stated maximum of 200 —
+then the response is `400` naming the problem (e.g. `limit must not
+exceed 200, got 500`), rather than silently substituting the default as
+if the parameter had been omitted. A caller explicitly asking for
+`limit=999999` used to silently get the *default* 50 back with nothing
+in the response distinguishing that from "there are only 50 rows total"
+— easy to mistake a truncated page for a complete result, e.g. when
+building an export that assumes it saw everything. `PATCH`/`DELETE`
+aren't paginated and are unaffected; this applies to every `GET
+/api/data/{table}` list request.

@@ -1277,6 +1277,36 @@ func TestAdminUI_DataBrowserPaginationBoundaryWithTiedSortColumn(t *testing.T) {
 	}
 }
 
+func TestAdminUI_OutOfRangePaginationIsRejected(t *testing.T) {
+	// ADMINUI-41
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		Schema: []string{notesSchema},
+	})
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	for _, path := range []string{
+		"/admin/ui/users?limit=999999",
+		"/admin/ui/users?offset=-1",
+		"/admin/ui/data/notes?limit=0",
+		"/admin/ui/data/notes?limit=abc",
+		"/admin/ui/data/notes?offset=-1",
+		"/admin/ui/audit-log?limit=999999",
+	} {
+		resp := doGetNoRedirect(t, owner, baseURL+path)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s: want 400, got %d: %s", path, resp.StatusCode, bodyString(t, resp))
+		}
+	}
+
+	// Omitted entirely still works, defaulting exactly as before.
+	ok := doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes")
+	if ok.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 with no pagination params, got %d", ok.StatusCode)
+	}
+}
+
 func TestAdminUI_OwnerSessionCookieHasDefensiveAttributes(t *testing.T) {
 	// ADMINUI-34
 	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
