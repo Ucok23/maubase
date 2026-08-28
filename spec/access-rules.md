@@ -151,3 +151,21 @@ their data erased. A deployment that genuinely needs data to outlive its
 owner's account (e.g. for a legal retention requirement) needs to
 re-parent or anonymize that data some other way — a `delete: denied`
 policy alone doesn't accomplish that today.
+
+## ACCESS-12: A runtime policy change applies to already-open realtime subscriptions, not just new ones
+Given a connection subscribed to a collection under one `_policies` read
+rule, still open and never resubscribing,
+when a developer+ owner changes that rule through SQL Studio (any
+non-`SELECT` statement triggers `ReloadSchema` — see `spec/admin-ui.md`
+ADMINUI-18) while that connection stays subscribed,
+then the very next write to that collection is delivered (or not) per
+the *current*, post-change rule — not whatever rule was in effect when
+the connection subscribed. This is a deliberate consequence of how
+gating is computed, not an oversight: `Broker.Subscribe` stores no
+rule/snapshot alongside a subscription at all, and `publish` reads
+`col.ReadRule` fresh out of the live registry every time, at write time
+— so visibility for a given subscription always floats with whatever
+the collection's rule currently is, for exactly as long as that
+connection stays open. A deployment narrowing a collection from
+`read: shared` to `read: owner` (or the reverse) takes effect for every
+open subscription immediately, with no need for clients to reconnect.
