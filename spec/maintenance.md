@@ -83,3 +83,18 @@ then the requests within the limit get their normal response (`200` or
 the re-rendered login page with an error), and requests beyond the
 limit get `429 Too Many Requests` with a `Retry-After` header, until the
 window resets.
+
+## MAINT-05: A rate-limited owner-plane login attempt is itself audit logged
+Given the owner-plane login throttle (`POST /admin/auth/login` or
+`POST /admin/ui/login`) is currently exhausted for some client IP,
+when that IP makes another attempt and gets `429` without any
+credential ever being checked,
+then a `login_rate_limited` entry appears in `GET /admin/audit-log`
+recording that client IP in its metadata — distinct from
+`login_failed`, which requires a credential that was actually looked
+up and found wanting. Without this, a sustained brute-force attempt
+that gets throttled would leave zero audit trail beyond the handful of
+attempts that slipped in under the limit, exactly the part of the
+attack an incident review most wants visibility into. Customer-plane
+rate-limited attempts aren't covered by this — see the cross-cutting
+note on customer-plane audit trail generally.

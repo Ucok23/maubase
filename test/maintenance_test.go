@@ -300,3 +300,63 @@ func TestMaintenance_CustomerAndOwnerLoginRateLimitsAreIndependent(t *testing.T)
 		t.Fatalf("customer plane: want still 429 (unaffected either way), got %d", stillExhausted.StatusCode)
 	}
 }
+
+func TestMaintenance_RateLimitedOwnerLoginIsAuditLogged(t *testing.T) {
+	// MAINT-05, JSON /admin/auth/login
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		LoginRateLimit: 2, LoginRateWindow: time.Minute,
+	})
+	admin := newClient(t)
+	if resp := ownerLogin(t, admin, baseURL, bootstrapEmail, bootstrapPassword); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup: owner login failed: %d", resp.StatusCode)
+	}
+
+	// That successful login already used 1 of the 2 allowed attempts; one
+	// more exhausts it, and the next after that is rate-limited.
+	ownerLogin(t, newClient(t), baseURL, bootstrapEmail, "wrong-password").Body.Close()
+	limited := ownerLogin(t, newClient(t), baseURL, bootstrapEmail, "wrong-password")
+	limited.Body.Close()
+	if limited.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("want 429, got %d", limited.StatusCode)
+	}
+
+	// admin's own session (from the setup login, unaffected by the
+	// exhaustion of an unrelated attempt count) can still read the log.
+	entries := auditLog(t, admin, baseURL)
+	if e := findAuditEntry(entries, "login_rate_limited", ""); e == nil {
+		t.Fatalf("want a login_rate_limited entry in the audit log, got %v", entries)
+	}
+}
+
+func TestMaintenance_RateLimitedAdminUILoginIsAuditLogged(t *testing.T) {
+	// MAINT-05, HTML /admin/ui/login
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		LoginRateLimit: 2, LoginRateWindow: time.Minute,
+	})
+	// Via the JSON endpoint, an entirely separate limiter instance from
+	// the HTML page's own — doesn't spend any of the budget under test.
+	admin := newClient(t)
+	if resp := ownerLogin(t, admin, baseURL, bootstrapEmail, bootstrapPassword); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup: owner login failed: %d", resp.StatusCode)
+	}
+
+	for i := range 2 {
+		resp := adminUILogin(t, newClient(t), baseURL, bootstrapEmail, "wrong-password")
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("attempt %d: want 200 (re-rendered form, within limit), got %d", i+1, resp.StatusCode)
+		}
+	}
+	limited := adminUILogin(t, newClient(t), baseURL, bootstrapEmail, "wrong-password")
+	limited.Body.Close()
+	if limited.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("want 429, got %d", limited.StatusCode)
+	}
+
+	entries := auditLog(t, admin, baseURL)
+	if e := findAuditEntry(entries, "login_rate_limited", ""); e == nil {
+		t.Fatalf("want a login_rate_limited entry in the audit log, got %v", entries)
+	}
+}

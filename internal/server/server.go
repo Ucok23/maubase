@@ -231,23 +231,38 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // treated as disabled, since ratelimit.Limiter itself has no "unlimited"
 // mode.
 func (s *Server) rateLimitLogin(next http.Handler) http.Handler {
-	return rateLimitMiddleware(s.loginLimiter, "too many login attempts", next)
+	return rateLimitMiddleware(s.loginLimiter, "too many login attempts", nil, next)
 }
 
 // rateLimitRegister throttles POST /oauth/register per client IP, via its
 // own limiter instance — see registerLimiter's doc comment for why this
 // isn't just rateLimitLogin again.
 func (s *Server) rateLimitRegister(next http.Handler) http.Handler {
-	return rateLimitMiddleware(s.registerLimiter, "too many registration attempts", next)
+	return rateLimitMiddleware(s.registerLimiter, "too many registration attempts", nil, next)
 }
 
 // rateLimitOwnerLogin throttles POST /admin/auth/login per client IP, via
-// its own limiter instance — see ownerLoginLimiter's doc comment.
+// its own limiter instance — see ownerLoginLimiter's doc comment. Unlike
+// the customer-plane rateLimitLogin above, a rejection here is also
+// audit-logged (EventLoginRateLimited): the owner-plane audit trail
+// otherwise records a failed login only once a credential was actually
+// looked up (EventLoginFailed), so a sustained brute-force attempt that
+// gets throttled left zero trace of the attempts the limiter itself
+// stopped — exactly what an incident review most wants to see. There's
+// no known account to name as target yet (the request never reached
+// handleOwnerLogin), so the client IP that got throttled is recorded in
+// metadata instead.
 func (s *Server) rateLimitOwnerLogin(next http.Handler) http.Handler {
-	return rateLimitMiddleware(s.ownerLoginLimiter, "too many login attempts", next)
+	return rateLimitMiddleware(s.ownerLoginLimiter, "too many login attempts", func(r *http.Request, key string) {
+		s.audit.RecordLogged(r.Context(), audit.EventLoginRateLimited, audit.Actor{}, audit.Target{}, map[string]any{"client_ip": key})
+	}, next)
 }
 
-func rateLimitMiddleware(limiter *ratelimit.Limiter, message string, next http.Handler) http.Handler {
+// rateLimitMiddleware is the shared throttle: onLimited, if non-nil, runs
+// once per actually-rejected (429) request, before the 429 itself is
+// written — used by rateLimitOwnerLogin to audit-log a rejection; every
+// other caller passes nil since they have nothing extra to do here.
+func rateLimitMiddleware(limiter *ratelimit.Limiter, message string, onLimited func(r *http.Request, clientIP string), next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if limiter.Limit <= 0 {
 			next.ServeHTTP(w, r)
@@ -255,6 +270,9 @@ func rateLimitMiddleware(limiter *ratelimit.Limiter, message string, next http.H
 		}
 		key := clientIP(r)
 		if ok, retryAfter := limiter.Allow(key); !ok {
+			if onLimited != nil {
+				onLimited(r, key)
+			}
 			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())+1))
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": message})
 			return
