@@ -389,9 +389,20 @@ func (s *Server) handleUserDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	socialIdentities, err := s.auth.ListSocialIdentities(r.Context(), user.ID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	pendingResetTokens, err := s.auth.CountPendingResetTokens(r.Context(), user.ID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	render(w, "user_detail", map[string]any{
 		"Title": user.Email, "Nav": "users", "Owner": owner,
 		"User": user, "SessionCount": sessionCount,
+		"SocialIdentities": socialIdentities, "PendingResetTokens": pendingResetTokens,
 		"CanWrite": owner.Role.AtLeast(ownerauth.RoleDeveloper),
 	})
 }
