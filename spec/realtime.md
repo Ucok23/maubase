@@ -121,6 +121,25 @@ had happened on process B itself. Without `MAUBASE_REDIS_URL` set
 (`Broker`'s default, `NewBroker`), this does not hold — see the note
 above.
 
+## RT-10: Account erasure's cascading delete reaches a live subscriber before its own token is revoked
+Given a connection subscribed to an owner-scoped collection, authenticated
+with an access token belonging to the row's owner, and a row that same
+subject owns in it,
+when that subject calls `DELETE /api/auth/me` (account erasure,
+`spec/identity.md` IDNT-10) — which deletes application data first, then
+revokes OAuth grants, then deletes the account itself (in that order;
+see `handleDeleteAccount`) —
+then the subscriber still receives the `deleted` event for that row,
+exactly as RT-04 describes for an ordinary direct delete: the
+already-open connection isn't affected by its own token being revoked a
+moment later in the same request, since a WebSocket connection's token
+is checked once at the handshake, never per message.
+But when that same, now-revoked token is used to open a *new*
+`/api/realtime` connection afterward,
+then it's rejected exactly as RT-01 rejects any invalid token — the
+original connection kept receiving events only because it predates the
+revocation, not because the token still works.
+
 ## Known limitation: cross-process policy-change skew (multi-process only)
 
 Each maubase process holds its own independently-`Discover()`'d
