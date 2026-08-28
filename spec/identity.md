@@ -105,6 +105,23 @@ then it links to the existing account rather than silently creating an
 unrelated new one — the exact-string mismatch a case-sensitive lookup
 would produce is exactly what used to defeat this.
 
+## IDNT-15: Account erasure cascades to linked social identities and outstanding reset tokens
+Given a user with a social identity linked to their account
+(`social_identities`, SOCIAL-09) and an outstanding, unredeemed
+password-reset token (`password_reset_tokens`, `spec/password-reset.md`),
+when they `DELETE /api/auth/me`,
+then both rows are gone along with the account, via the same
+`ON DELETE CASCADE` foreign key (`user_id REFERENCES users(id)`) IDNT-10
+already relies on for owned auto-REST rows — not asserted anywhere
+before this scenario, despite being one `PRAGMA foreign_keys` flip or a
+migration typo away from silently regressing. Afterward: that same
+provider identity completing the flow again is treated as never seen
+before (SOCIAL-01), creating a brand-new account rather than erroring or
+resurrecting the deleted one; and the old reset token no longer redeems
+(`400`, the same rejection an already-invalid token gets) rather than
+resetting a password on a deleted account or on whoever happens to reuse
+that email later.
+
 ## IDNT-16: Concurrent duplicate signups for the same email only let one through
 Given no account yet exists for a given email,
 when several `POST /api/auth/signup` requests for that exact same email
