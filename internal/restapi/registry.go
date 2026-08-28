@@ -260,6 +260,32 @@ func isReserved(name string) bool {
 	return strings.HasPrefix(name, "sqlite_") || reservedTables[name]
 }
 
+// columnAffinity implements SQLite's column type affinity rules (see
+// https://www.sqlite.org/datatype3.html#determination_of_column_affinity)
+// closely enough to distinguish TEXT affinity, where a value is stored
+// exactly as given, from the numeric affinities (INTEGER, REAL, and the
+// NUMERIC catch-all) that will coerce a canonical-looking numeric string
+// into a number before storing or comparing it. BLOB affinity (a declared
+// type containing "BLOB", or no declared type at all) is also
+// coercion-free, but isn't this codebase's convention for any column, so
+// callers checking for TEXT affinity specifically treat it the same as a
+// numeric affinity: not what owner_id is supposed to be.
+func columnAffinity(declType string) string {
+	t := strings.ToUpper(declType)
+	switch {
+	case strings.Contains(t, "INT"):
+		return "INTEGER"
+	case strings.Contains(t, "CHAR"), strings.Contains(t, "CLOB"), strings.Contains(t, "TEXT"):
+		return "TEXT"
+	case strings.Contains(t, "BLOB"), t == "":
+		return "BLOB"
+	case strings.Contains(t, "REAL"), strings.Contains(t, "FLOA"), strings.Contains(t, "DOUB"):
+		return "REAL"
+	default:
+		return "NUMERIC"
+	}
+}
+
 func describeTable(ctx context.Context, db *sql.DB, name string) (*Collection, error) {
 	rows, err := db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, quoteIdent(name)))
 	if err != nil {
@@ -282,6 +308,9 @@ func describeTable(ctx context.Context, db *sql.DB, name string) (*Collection, e
 			pkCols = append(pkCols, c)
 		}
 		if colName == OwnerColumnName {
+			if aff := columnAffinity(declType); aff != "TEXT" {
+				return nil, fmt.Errorf("%s.owner_id has declared type %q (%s affinity), but owner_id must have TEXT affinity: a numeric affinity lets SQLite silently coerce differently-formatted owner values (e.g. \"7\", \"07\", and \"7.0\") into the same stored value, so distinct subjects could end up scoped to the same rows — declare it as owner_id TEXT NOT NULL instead", name, declType, aff)
+			}
 			col.OwnerColumn = OwnerColumnName
 		}
 	}

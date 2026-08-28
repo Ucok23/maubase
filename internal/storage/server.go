@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strconv"
 	"time"
@@ -174,7 +175,16 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", meta.ContentType)
 	w.Header().Set("Content-Length", strconv.FormatInt(meta.SizeBytes, 10))
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", meta.Filename))
+	// mime.FormatMediaType (not a hand-built fmt.Sprintf(`filename=%q`,
+	// ...)) so an uploaded filename with a quote or backslash gets a
+	// correctly-escaped quoted-string, and one with a control character
+	// or non-ASCII text (RFC 6266's `filename=` is otherwise limited to
+	// ASCII) gets the RFC 5987/8187 `filename*=utf-8''<percent-encoded>`
+	// form automatically instead. The storage key itself is always a
+	// fresh UUID (see s.backend.Put above), so there's no path-traversal
+	// risk from meta.Filename either way — this is purely about the
+	// header rendering correctly for the browser's Save dialog.
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": meta.Filename}))
 	_, _ = io.Copy(w, rc)
 }
 

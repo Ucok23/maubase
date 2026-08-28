@@ -121,6 +121,48 @@ had happened on process B itself. Without `MAUBASE_REDIS_URL` set
 (`Broker`'s default, `NewBroker`), this does not hold — see the note
 above.
 
+## RT-10: Account erasure's cascading delete reaches a live subscriber before its own token is revoked
+Given a connection subscribed to an owner-scoped collection, authenticated
+with an access token belonging to the row's owner, and a row that same
+subject owns in it,
+when that subject calls `DELETE /api/auth/me` (account erasure,
+`spec/identity.md` IDNT-10) — which deletes application data first, then
+revokes OAuth grants, then deletes the account itself (in that order;
+see `handleDeleteAccount`) —
+then the subscriber still receives the `deleted` event for that row,
+exactly as RT-04 describes for an ordinary direct delete: the
+already-open connection isn't affected by its own token being revoked a
+moment later in the same request, since a WebSocket connection's token
+is checked once at the handshake, never per message.
+But when that same, now-revoked token is used to open a *new*
+`/api/realtime` connection afterward,
+then it's rejected exactly as RT-01 rejects any invalid token — the
+original connection kept receiving events only because it predates the
+revocation, not because the token still works.
+
+## RT-11: The admin UI's data browser goes through the same fan-out as /api/data/*; SQL Studio doesn't
+Given a subscriber watching a collection,
+when a developer+ owner creates, edits, or deletes a row through
+`/admin/ui/data/{collection}` (the data browser, `internal/restapi`'s
+`AdminCreateRow`/`AdminUpdateRow`/`AdminDeleteRow`),
+then that subscriber receives the same `created`/`updated`/`deleted`
+event RT-02/03/04 describe for a customer-facing write — the "can't be
+bypassed by writing some other way" invariant above applies to the
+admin UI's own writes exactly as it does to account-erasure's cascading
+delete, since a support engineer fixing a customer's row through the
+admin UI is exactly the kind of "some other way" that invariant exists
+for.
+This does **not** extend to SQL Studio's raw `INSERT`/`UPDATE`/`DELETE`
+(`/admin/ui/sql`): unlike the data browser, which always knows exactly
+which collection and row a structured create/update/delete touched,
+arbitrary SQL text would have to be parsed to determine that — multiple
+tables in one statement, rows matched by an arbitrary `WHERE` clause,
+no fixed row shape to attach to an event. This is a deliberate,
+narrower carve-out than the data browser's, not an oversight: a SQL
+Studio write is still fully audit-logged (ADMINUI-20) and still
+reflected the next time a subscriber's client re-fetches, just never
+pushed live.
+
 ## RT-12: A slow subscriber is isolated: it may miss events, but never slows down the writes that produced them
 Given two connections subscribed to the same collection, one of which
 stops reading its socket entirely while the other keeps reading

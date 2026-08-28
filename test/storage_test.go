@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strings"
 	"testing"
 
 	"maubase/internal/storage"
@@ -374,5 +375,137 @@ func TestStorage_PartialDeleteOwnedFailureLeavesConsistentState(t *testing.T) {
 	}
 	if retryResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("retry: want 204, got %d: %s", retryResp.StatusCode, bodyString(t, retryResp))
+	}
+}
+
+func TestStorage_OversizedUploadRejected(t *testing.T) {
+	// STOR-09
+	baseURL := testserver.NewCustom(t, testserver.Options{MaxUploadBytes: 200})
+	token := storageToken(t, baseURL, "stor09@example.com", []string{"files:read", "files:write"})
+
+	resp := uploadFile(t, baseURL, token, "big.bin", bytes.Repeat([]byte("a"), 1000))
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("oversized upload: want 400, got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+
+	listResp := doAuthed(t, http.MethodGet, baseURL+"/api/storage/files", token, nil)
+	list := decodeJSONMap(t, listResp)
+	if records, _ := list["records"].([]any); len(records) != 0 {
+		t.Fatalf("want no file row created by the rejected upload, got %v", records)
+	}
+}
+
+func TestStorage_MalformedMultipartRejectedNot500(t *testing.T) {
+	// STOR-10
+	baseURL := testserver.New(t)
+	token := storageToken(t, baseURL, "stor10@example.com", []string{"files:read", "files:write"})
+
+	postMultipart := func(t *testing.T, contentType string, body []byte) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, baseURL+"/api/storage/files", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("build request: %v", err)
+		}
+		req.Header.Set("Content-Type", contentType)
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST /api/storage/files: %v", err)
+		}
+		return resp
+	}
+
+	// Not valid multipart at all, despite the header claiming it is.
+	garbage := postMultipart(t, "multipart/form-data; boundary=xyz", []byte("this is not multipart data"))
+	if garbage.StatusCode != http.StatusBadRequest {
+		t.Fatalf("garbage multipart body: want 400, got %d: %s", garbage.StatusCode, bodyString(t, garbage))
+	}
+
+	// Valid multipart, but no "file" field — a different field entirely.
+	var wrongFieldBody bytes.Buffer
+	mw := multipart.NewWriter(&wrongFieldBody)
+	fw, err := mw.CreateFormField("not_file")
+	if err != nil {
+		t.Fatalf("create form field: %v", err)
+	}
+	if _, err := fw.Write([]byte("hello")); err != nil {
+		t.Fatalf("write form field: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+	wrongField := postMultipart(t, mw.FormDataContentType(), wrongFieldBody.Bytes())
+	if wrongField.StatusCode != http.StatusBadRequest {
+		t.Fatalf("multipart missing the file field: want 400, got %d: %s", wrongField.StatusCode, bodyString(t, wrongField))
+	}
+}
+
+func TestStorage_ZeroByteFileUploadsAndDownloads(t *testing.T) {
+	// STOR-11
+	baseURL := testserver.New(t)
+	token := storageToken(t, baseURL, "stor11@example.com", []string{"files:read", "files:write"})
+
+	uploadResp := uploadFile(t, baseURL, token, "empty.txt", []byte{})
+	if uploadResp.StatusCode != http.StatusCreated {
+		t.Fatalf("zero-byte upload: want 201, got %d: %s", uploadResp.StatusCode, bodyString(t, uploadResp))
+	}
+	created := decodeJSONMap(t, uploadResp)
+	if size, _ := created["size_bytes"].(float64); size != 0 {
+		t.Fatalf("want size_bytes 0, got %v", created["size_bytes"])
+	}
+	id, _ := created["id"].(string)
+
+	contentResp := doAuthed(t, http.MethodGet, baseURL+"/api/storage/files/"+id+"/content", token, nil)
+	if contentResp.StatusCode != http.StatusOK {
+		t.Fatalf("download zero-byte file: want 200, got %d", contentResp.StatusCode)
+	}
+	body, err := io.ReadAll(contentResp.Body)
+	if err != nil {
+		t.Fatalf("read content: %v", err)
+	}
+	if len(body) != 0 {
+		t.Fatalf("want an empty body, got %d bytes", len(body))
+	}
+}
+
+func TestStorage_AdversarialFilenameContentDispositionIsWellFormed(t *testing.T) {
+	// STOR-12
+	baseURL := testserver.New(t)
+	token := storageToken(t, baseURL, "stor12@example.com", []string{"files:read", "files:write"})
+
+	for _, tc := range []struct {
+		name, filename string
+		want           string // substring the Content-Disposition header must contain
+	}{
+		{"quote", `with"quote.txt`, `filename="with\"quote.txt"`},
+		{"backslash", `with\backslash.txt`, `filename="with\\backslash.txt"`},
+		{"non-ascii", "日本語.txt", "filename*=utf-8''%E6%97%A5%E6%9C%AC%E8%AA%9E.txt"},
+		{"emoji", "emoji😀.txt", "filename*=utf-8''emoji%F0%9F%98%80.txt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			uploadResp := uploadFile(t, baseURL, token, tc.filename, []byte("x"))
+			if uploadResp.StatusCode != http.StatusCreated {
+				t.Fatalf("upload: want 201, got %d: %s", uploadResp.StatusCode, bodyString(t, uploadResp))
+			}
+			id, _ := decodeJSONMap(t, uploadResp)["id"].(string)
+
+			contentResp := doAuthed(t, http.MethodGet, baseURL+"/api/storage/files/"+id+"/content", token, nil)
+			if contentResp.StatusCode != http.StatusOK {
+				t.Fatalf("download: want 200, got %d", contentResp.StatusCode)
+			}
+			cd := contentResp.Header.Get("Content-Disposition")
+			if !strings.HasPrefix(cd, "attachment") {
+				t.Fatalf("want a well-formed attachment Content-Disposition, got %q", cd)
+			}
+			if !strings.Contains(cd, tc.want) {
+				t.Fatalf("want Content-Disposition to contain %q, got %q", tc.want, cd)
+			}
+			// Never the raw, unescaped filename leaking through unquoted —
+			// that's exactly what a naive fmt.Sprintf(`filename=%q`, ...)
+			// used to do for non-ASCII text.
+			if strings.Contains(cd, tc.filename) && tc.name != "quote" && tc.name != "backslash" {
+				t.Fatalf("want the adversarial filename properly encoded, not embedded raw, got %q", cd)
+			}
+		})
 	}
 }
