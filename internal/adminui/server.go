@@ -765,6 +765,13 @@ func (s *Server) handleSQLStudioPage(w http.ResponseWriter, r *http.Request) {
 // reload afterward, the same as internal/restapi.AdminCreateTable does,
 // so e.g. a CREATE TABLE run here shows up in the data browser
 // immediately (ADMINUI-18).
+//
+// Deliberately does not publish a realtime event, unlike the data
+// browser's structured AdminCreateRow/AdminUpdateRow/AdminDeleteRow
+// (spec/realtime.md RT-11): arbitrary SQL text would have to be parsed
+// to know which collection and rows it touched, which this doesn't
+// attempt. A SQL Studio write is still audit-logged and still visible
+// on the next ordinary GET, just never pushed live to a subscriber.
 func (s *Server) handleSQLStudioRun(w http.ResponseWriter, r *http.Request) {
 	owner := ownerFromContext(r.Context())
 	if err := r.ParseForm(); err != nil {
