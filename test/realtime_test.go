@@ -323,6 +323,52 @@ func TestRealtime_DeniedReadProducesNoEvents(t *testing.T) {
 	expectNoEvent(t, rc)
 }
 
+func TestRealtime_AccountErasureDeliversDeletedEventBeforeRevokingItsOwnToken(t *testing.T) {
+	// RT-10
+	baseURL := testserver.NewWithSchema(t, notesSchema)
+	client := newClient(t)
+	signUp(t, client, baseURL, "rt-erasure@example.com", "correcthorse")
+	token := restTokenForClient(t, baseURL, client)
+
+	rc := connectRealtime(t, baseURL, token)
+	subscribe(t, rc, "notes")
+
+	createResp := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", token, map[string]any{"title": "will be erased", "body": "x"})
+	created := decodeJSONMap(t, createResp)
+	id, _ := created["id"].(string)
+	readEvent(t, rc) // drain "created"
+
+	del, err := client.Do(mustRequest(t, http.MethodDelete, baseURL+"/api/auth/me"))
+	if err != nil {
+		t.Fatalf("DELETE /api/auth/me: %v", err)
+	}
+	if del.StatusCode != http.StatusNoContent {
+		t.Fatalf("want 204, got %d: %s", del.StatusCode, bodyString(t, del))
+	}
+
+	// RT-04's guarantee extends to account erasure's cascading delete
+	// (spec/identity.md IDNT-10): the already-open subscription still
+	// receives the deleted event for the row it just lost, even though
+	// the very access token it authenticated with is revoked moments
+	// later in that same request — a WebSocket connection's token is
+	// checked once at the handshake, never per message.
+	ev := readEvent(t, rc)
+	if ev.Type != "deleted" || ev.Collection != "notes" || ev.ID != id {
+		t.Fatalf("want a deleted/notes event for the erased account's row, got %+v", ev)
+	}
+
+	// The token is now genuinely revoked: a *new* connection attempt
+	// with it is rejected outright, same as RT-01 for any invalid
+	// token — the already-open connection above got its event because
+	// it predates the revocation, not because the token still works.
+	if conn, status := dialRealtime(t, baseURL, token); status != http.StatusUnauthorized {
+		if conn != nil {
+			conn.Close()
+		}
+		t.Fatalf("reconnect with the erased account's token: want 401, got %d", status)
+	}
+}
+
 func TestRealtime_AdminUIDataBrowserWritesPublish(t *testing.T) {
 	// RT-11
 	baseURL := testserver.NewCustom(t, testserver.Options{
