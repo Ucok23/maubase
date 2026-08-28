@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -1109,6 +1110,96 @@ func TestAdminUI_SortsRowsByColumn(t *testing.T) {
 	fallback := doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes?sort=not_a_real_column")
 	if fallback.StatusCode != http.StatusOK {
 		t.Fatalf("bogus sort column: want 200 (falls back to default order), got %d", fallback.StatusCode)
+	}
+}
+
+func TestAdminUI_UsersPagePaginationBoundary(t *testing.T) {
+	// ADMINUI-40
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+
+	const total = 51 // defaultLimit (50) + 1, so exactly one row must land on page 2.
+	emails := make([]string, total)
+	for i := 0; i < total; i++ {
+		emails[i] = fmt.Sprintf("boundary-user-%02d@example.com", i)
+		signUp(t, newClient(t), baseURL, emails[i], "correcthorse")
+	}
+
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	page1 := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/users"))
+	page2 := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/users?offset=50"))
+
+	for _, email := range emails {
+		onPage1, onPage2 := strings.Contains(page1, email), strings.Contains(page2, email)
+		if onPage1 == onPage2 {
+			t.Fatalf("want %q on exactly one page, got page1=%v page2=%v", email, onPage1, onPage2)
+		}
+	}
+}
+
+func TestAdminUI_DataBrowserPaginationBoundary(t *testing.T) {
+	// ADMINUI-40
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		Schema: []string{notesSchema},
+	})
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	const total = 51 // defaultLimit (50) + 1
+	titles := make([]string, total)
+	for i := 0; i < total; i++ {
+		titles[i] = fmt.Sprintf("boundary-row-%02d", i)
+		if _, err := owner.PostForm(baseURL+"/admin/ui/data/notes", url.Values{
+			"title": {titles[i]}, "body": {"x"}, "owner_id": {"user-a"},
+		}); err != nil {
+			t.Fatalf("create row %q: %v", titles[i], err)
+		}
+	}
+
+	page1 := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes"))
+	page2 := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes?offset=50"))
+
+	for _, title := range titles {
+		onPage1, onPage2 := strings.Contains(page1, title), strings.Contains(page2, title)
+		if onPage1 == onPage2 {
+			t.Fatalf("want %q on exactly one page, got page1=%v page2=%v", title, onPage1, onPage2)
+		}
+	}
+}
+
+func TestAdminUI_DataBrowserPaginationBoundaryWithTiedSortColumn(t *testing.T) {
+	// ADMINUI-40
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		Schema: []string{notesSchema},
+	})
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	// Every row shares the same owner_id, so sorting by it (a real but
+	// non-unique column) puts all 51 rows in one tied group — the case
+	// AdminListRows's primary-key tie-break exists for.
+	const total = 51
+	titles := make([]string, total)
+	for i := 0; i < total; i++ {
+		titles[i] = fmt.Sprintf("tied-row-%02d", i)
+		if _, err := owner.PostForm(baseURL+"/admin/ui/data/notes", url.Values{
+			"title": {titles[i]}, "body": {"x"}, "owner_id": {"same-owner-for-all"},
+		}); err != nil {
+			t.Fatalf("create row %q: %v", titles[i], err)
+		}
+	}
+
+	page1 := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes?sort=owner_id"))
+	page2 := bodyString(t, doGetNoRedirect(t, owner, baseURL+"/admin/ui/data/notes?sort=owner_id&offset=50"))
+
+	for _, title := range titles {
+		onPage1, onPage2 := strings.Contains(page1, title), strings.Contains(page2, title)
+		if onPage1 == onPage2 {
+			t.Fatalf("want %q on exactly one page when sorted by a tied column, got page1=%v page2=%v", title, onPage1, onPage2)
+		}
 	}
 }
 
