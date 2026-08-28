@@ -470,3 +470,114 @@ func TestRealtime_SQLStudioWritesDoNotPublish(t *testing.T) {
 	}
 	expectNoEvent(t, rc)
 }
+
+// TestRealtime_SlowSubscriberIsIsolatedAndDoesNotStallWrites exercises
+// RT-12: Broker.publishLocal's per-subscriber send is a non-blocking
+// `select { case c.events <- ev: default: }` into a 16-slot channel, so
+// a subscriber that stops reading should simply miss events past
+// capacity while an unrelated fast subscriber keeps receiving
+// everything, and critically neither subscriber's speed should affect
+// how quickly the writes that triggered those events complete. This was
+// asserted by code inspection only, never actually tested.
+//
+// To force genuine backpressure reliably (not just "eventually,
+// depending on this machine's OS socket buffer sizes"), each written
+// record carries a 100KB field: at 200 unread events that's ~20MB
+// backlogged for the slow subscriber, comfortably past any realistic
+// combination of the 16-slot channel, gorilla/websocket's 4KB write
+// buffer, and OS-level socket buffers — so the drop is forced by
+// payload volume, not by racing a timer against however big this
+// particular environment's buffers happen to be.
+func TestRealtime_SlowSubscriberIsIsolatedAndDoesNotStallWrites(t *testing.T) {
+	// RT-12
+	baseURL := testserver.NewWithSchema(t, tagsSchema) // no owner_id: ownerID "" reaches every subscriber
+	tokenFast := restToken(t, baseURL, "rt-backpressure-fast@example.com", []string{"records:read", "records:write"})
+	tokenSlow := restToken(t, baseURL, "rt-backpressure-slow@example.com", []string{"records:read", "records:write"})
+
+	const n = 200
+	largeValue := strings.Repeat("x", 100*1024)
+
+	fast := connectRealtime(t, baseURL, tokenFast)
+	subscribe(t, fast, "tags")
+
+	// Drain the fast subscriber concurrently with the writes below, not
+	// after they all complete: realtimeClient's own events channel is
+	// itself only 16-slots deep (see its doc comment), so reading it
+	// only afterward would make "fast" just as backlogged as the
+	// deliberately-slow subscriber, defeating the point of the
+	// comparison.
+	fastCount := 0
+	fastDone := make(chan struct{})
+	go func() {
+		defer close(fastDone)
+		for i := 0; i < n; i++ {
+			select {
+			case _, ok := <-fast.events:
+				if !ok {
+					return
+				}
+				fastCount++
+			case <-time.After(15 * time.Second):
+				return
+			}
+		}
+	}()
+
+	// The slow subscriber: dial directly (not via connectRealtime, which
+	// starts a draining goroutine) and never read from it at all until
+	// every write below has already completed — "stops reading until
+	// its buffer is full."
+	slowConn, status := dialRealtime(t, baseURL, tokenSlow)
+	if slowConn == nil {
+		t.Fatalf("connect slow subscriber: want a successful upgrade, got status %d", status)
+	}
+	defer slowConn.Close()
+	if err := slowConn.WriteJSON(map[string]string{"type": "subscribe", "collection": "tags"}); err != nil {
+		t.Fatalf("subscribe (slow): %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	writeStart := time.Now()
+	for i := 0; i < n; i++ {
+		resp := doAuthed(t, http.MethodPost, baseURL+"/api/data/tags", tokenFast, map[string]any{"name": largeValue})
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("create %d: want 201, got %d", i, resp.StatusCode)
+		}
+	}
+	writeElapsed := time.Since(writeStart)
+
+	// None of the writes waited on the slow subscriber's backlog —
+	// Broker.publishLocal's non-blocking send means the write path
+	// never blocks on a subscriber's channel or socket, regardless of
+	// how far behind that subscriber is.
+	if writeElapsed > 10*time.Second {
+		t.Fatalf("want %d writes to complete quickly despite an unread slow subscriber, took %s", n, writeElapsed)
+	}
+
+	// The fast subscriber (drained concurrently above) received every
+	// single event.
+	<-fastDone
+	if fastCount != n {
+		t.Fatalf("want the fast subscriber to receive all %d events, got %d", n, fastCount)
+	}
+
+	// The slow subscriber, drained only now that every write is done, got
+	// at least something (a healthy connection isn't starved outright)
+	// but strictly fewer than n — some were dropped once its buffer
+	// filled, per the documented at-most-once/may-drop behavior.
+	slowCount := 0
+	_ = slowConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	for {
+		var ev realtimeEvent
+		if err := slowConn.ReadJSON(&ev); err != nil {
+			break
+		}
+		slowCount++
+	}
+	if slowCount == 0 {
+		t.Fatalf("want the slow subscriber to have received at least some events, got 0")
+	}
+	if slowCount >= n {
+		t.Fatalf("want the slow subscriber to have missed at least some of the %d events (backpressure), got all %d", n, slowCount)
+	}
+}
