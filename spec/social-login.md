@@ -132,3 +132,21 @@ Before this, the session cookie was unconditionally overwritten with
 whatever account the identity resolved to, so a curious click while
 signed in could switch the browser to an unrelated account with no
 warning at all.
+
+## SOCIAL-11: Starting a second provider's flow doesn't break the first's in-flight callback
+Given a browser that starts `GET /api/auth/social/google` (state A
+stashed in its own cookie), then — before completing that callback —
+also starts `GET /api/auth/social/github` (state B, its own separate
+cookie),
+when the original `google` callback later completes with state A,
+then it succeeds normally, exactly as if the `github` flow had never
+started — the state cookie is namespaced per provider
+(`maubase_social_state_{provider}`), so starting a second provider's
+flow can't clobber a first, still-in-flight one. Before this, both
+flows shared one global cookie name, so starting `github` after
+`google` (a plausible two-tab or change-your-mind sequence on a login
+screen offering multiple "Continue with X" buttons) overwrote it with
+state B — the later-completing `google` callback then failed
+SOCIAL-04's state-mismatch check even though nothing was actually
+wrong with it. Failed safe (a CSRF rejection, not a security hole) but
+a real robustness gap for any screen offering more than one provider.
