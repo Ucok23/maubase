@@ -88,11 +88,16 @@ What's here now (v1, step 1 of the roadmap):
     `GET /api/data/{table}/{id}`, `POST /api/data/{table}`,
     `PATCH /api/data/{table}/{id}` (partial update),
     `DELETE /api/data/{table}/{id}`
-  - A deployment defines its own tables by dropping numbered `.sql` files
-    in `migrations/` (configurable via `MAUBASE_MIGRATIONS_DIR`) — applied
-    after maubase's own embedded migrations, on every startup. This is the
-    *only* way to add application tables; there's no dynamic
-    schema-creation API in v1.
+  - A deployment can define its own tables three ways, all of which just
+    create an ordinary table `Discover` then picks up — none is more
+    "real" than the others: dropping numbered `.sql` files in
+    `migrations/` (configurable via `MAUBASE_MIGRATIONS_DIR`), applied on
+    every startup — the only one that's disk-versioned and reviewable
+    like a normal migration history; the admin UI's **create table** form
+    (`/admin/ui/tables/new`, `developer`+), live with no restart; or
+    running raw `CREATE TABLE` in **SQL Studio** (`/admin/ui/sql`,
+    `owner`-only). See the embedded admin UI section below for the latter
+    two.
   - Known v1 limits: no composite primary keys, no BLOB columns, no
     filtering beyond pagination, single fixed owner-column convention
     (`owner_id`) rather than per-table config.
@@ -173,9 +178,8 @@ What's here now (v1, step 1 of the roadmap):
     authenticated path. Viewing needs `viewer`+; creating/editing/
     deleting rows (including reassigning a row's `owner_id` directly, an
     admin-only capability) needs `developer`+.
-  - **Create table** (`/admin/ui/tables/new`, `developer`+): the dynamic
-    schema-creation API auto-REST's own docs used to say didn't exist —
-    name a table, optionally check "row-scoped" (adds a real `owner_id`
+  - **Create table** (`/admin/ui/tables/new`, `developer`+): name a
+    table, optionally check "row-scoped" (adds a real `owner_id`
     column), define columns (name/type/required), and it's live at
     `/admin/ui/data/{name}` and `/api/data/{name}` immediately, no
     restart. `internal/restapi.Server.ReloadSchema` (an atomically
