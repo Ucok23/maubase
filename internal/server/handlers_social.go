@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"maubase/internal/audit"
 	"maubase/internal/auth"
 )
 
@@ -96,7 +97,7 @@ func (s *Server) handleSocialCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	session, err := s.auth.LoginOrCreateViaSocial(r.Context(), provider.Name, identity.ProviderUserID, identity.Email, currentUserID)
+	session, newAccount, err := s.auth.LoginOrCreateViaSocial(r.Context(), provider.Name, identity.ProviderUserID, identity.Email, currentUserID)
 	if err != nil {
 		if errors.Is(err, auth.ErrSocialIdentityLinkedElsewhere) {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
@@ -105,6 +106,14 @@ func (s *Server) handleSocialCallback(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
+	s.audit.RecordLogged(r.Context(), audit.EventCustomerSocialSignIn,
+		audit.Actor{ID: session.UserID}, audit.Target{ID: session.UserID},
+		map[string]any{
+			"provider":          provider.Name,
+			"new_account":       newAccount,
+			"already_signed_in": currentUserID != "",
+		},
+	)
 	setSessionCookie(w, session)
 	http.Redirect(w, r, s.socialLoginRedirect, http.StatusSeeOther)
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"maubase/internal/audit"
 	"maubase/internal/auth"
 )
 
@@ -35,6 +36,8 @@ func (s *Server) handleSignUp(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, err)
 		return
 	}
+	s.audit.RecordLogged(r.Context(), audit.EventCustomerSignup,
+		audit.Actor{ID: user.ID, Email: user.Email}, audit.Target{ID: user.ID, Email: user.Email}, nil)
 
 	session, err := s.auth.Login(r.Context(), req.Email, req.Password)
 	if err != nil {
@@ -59,9 +62,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	session, err := s.auth.Login(r.Context(), req.Email, req.Password)
 	if err != nil {
+		// Recorded whether or not req.Email belongs to a real account —
+		// same as OWNR-12's owner-plane equivalent, a failed authentication
+		// attempt is exactly the kind of event an audit trail exists to
+		// capture, whether or not the account is real.
+		s.audit.RecordLogged(r.Context(), audit.EventCustomerLoginFailed, audit.Actor{}, audit.Target{Email: req.Email}, nil)
 		writeAuthError(w, err)
 		return
 	}
+	// req.Email matches the account's stored email exactly (Login looked
+	// it up by that value), so it's safe to use directly here without a
+	// separate lookup — same as the owner-plane login handler.
+	s.audit.RecordLogged(r.Context(), audit.EventCustomerLogin,
+		audit.Actor{ID: session.UserID, Email: req.Email}, audit.Target{}, nil)
 
 	setSessionCookie(w, session)
 	writeJSON(w, http.StatusOK, map[string]any{"expires_at": session.ExpiresAt})
@@ -84,13 +97,21 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawToken, _, ok, err := s.auth.CreateResetToken(r.Context(), req.Email)
+	rawToken, userID, ok, err := s.auth.CreateResetToken(r.Context(), req.Email)
 	if err != nil {
 		log.Printf("forgot-password: create reset token: %v", err)
 		w.WriteHeader(http.StatusNoContent) // see the two error cases below for why this stays 204
 		return
 	}
 	if ok {
+		// Recorded only for a real account — a request against an email
+		// that doesn't exist has no account to attribute the entry to, and
+		// (unlike a failed login) isn't itself suspicious in the way this
+		// entry exists to help spot: "was this account's password reset
+		// from an unusual pattern of requests?" only has an answer once
+		// there's an account in the picture.
+		s.audit.RecordLogged(r.Context(), audit.EventCustomerPasswordResetRequested,
+			audit.Actor{}, audit.Target{ID: userID, Email: req.Email}, nil)
 		link := s.passwordResetURL + "?token=" + url.QueryEscape(rawToken)
 		html := fmt.Sprintf(
 			`<p>Someone requested a password reset for this account.</p><p><a href="%s">Reset your password</a></p><p>This link expires in one hour. If you didn't request this, you can ignore this email.</p>`,
@@ -125,6 +146,8 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, err)
 		return
 	}
+	s.audit.RecordLogged(r.Context(), audit.EventCustomerPasswordResetCompleted,
+		audit.Actor{ID: userID}, audit.Target{ID: userID}, nil)
 	// Sessions are already revoked (inside ResetPassword's own
 	// transaction); an OAuth access/refresh token issued to a third-
 	// party client while one of those sessions was active is a separate
@@ -143,6 +166,14 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	token := sessionTokenFromRequest(r)
 	if token != "" {
+		// Resolved before Logout invalidates the session, so there's still
+		// a user identity to attribute the audit entry to — same pattern
+		// as the owner-plane logout handler. A missing or already-invalid
+		// token logs nothing, since there's no one to name.
+		if user, err := s.auth.ValidateSession(r.Context(), token); err == nil {
+			s.audit.RecordLogged(r.Context(), audit.EventCustomerLogout,
+				audit.Actor{ID: user.ID, Email: user.Email}, audit.Target{}, nil)
+		}
 		_ = s.auth.Logout(r.Context(), token)
 	}
 	clearSessionCookie(w)
@@ -219,6 +250,12 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
+	// Logged after DeleteUser succeeds, using the identity captured before
+	// it ran — same "record the target's identity even though it's gone
+	// by the time anyone reads the log" treatment OWNR-15/17 already give
+	// owner_delete.
+	s.audit.RecordLogged(r.Context(), audit.EventCustomerAccountDeleted,
+		audit.Actor{ID: user.ID, Email: user.Email}, audit.Target{ID: user.ID, Email: user.Email}, nil)
 	clearSessionCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
