@@ -11,4 +11,5 @@ var (
 	ErrInvalidRole         = errors.New("invalid role")
 	ErrLastOwner           = errors.New("cannot remove or demote the last remaining owner")
 	ErrAlreadyBootstrapped = errors.New("an owner already exists; bootstrap is a no-op")
+	ErrOwnerNotFound       = errors.New("owner not found")
 )

@@ -513,8 +513,8 @@ func (s *Server) handleMaintenancePage(w http.ResponseWriter, r *http.Request) {
 
 // handlePurgeSessions mirrors internal/server's JSON
 // POST /admin/maintenance/purge-sessions handler — see spec/maintenance.md
-// MAINT-01..03, which this reuses exactly (same PurgeExpiredSessions
-// calls, same audit event).
+// MAINT-01..03, which this reuses exactly (same PurgeExpiredSessions/
+// PurgeExpiredResetTokens calls, same audit event).
 func (s *Server) handlePurgeSessions(w http.ResponseWriter, r *http.Request) {
 	owner := ownerFromContext(r.Context())
 
@@ -528,12 +528,17 @@ func (s *Server) handlePurgeSessions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	resetTokensPurged, err := s.auth.PurgeExpiredResetTokens(r.Context())
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	s.audit.RecordLogged(r.Context(), audit.EventSessionsPurged, audit.Actor{ID: owner.ID, Email: owner.Email}, audit.Target{}, map[string]any{
-		"sessions": sessionsPurged, "owner_sessions": ownerSessionsPurged,
+		"sessions": sessionsPurged, "owner_sessions": ownerSessionsPurged, "reset_tokens": resetTokensPurged,
 	})
 	render(w, "maintenance", map[string]any{
 		"Title": "Maintenance", "Nav": "maintenance", "Owner": owner, "Purged": true,
-		"SessionsPurged": sessionsPurged, "OwnerSessionsPurged": ownerSessionsPurged,
+		"SessionsPurged": sessionsPurged, "OwnerSessionsPurged": ownerSessionsPurged, "ResetTokensPurged": resetTokensPurged,
 	})
 }
 

@@ -98,22 +98,37 @@ func (b *Broker) Subscribe(c *Conn, collection string) {
 }
 
 // Unsubscribe removes c from collection's subscribers, leaving any of its
-// other subscriptions untouched. A no-op if it wasn't subscribed.
+// other subscriptions untouched. A no-op if it wasn't subscribed. Also
+// deletes collection's own map entry once it's empty — see Close's doc
+// comment for why this matters.
 func (b *Broker) Unsubscribe(c *Conn, collection string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if set := b.subs[collection]; set != nil {
 		delete(set, c)
+		if len(set) == 0 {
+			delete(b.subs, collection)
+		}
 	}
 }
 
-// Close removes c from every collection it was subscribed to and closes
-// its event channel — call once, when its connection ends.
+// Close removes c from every collection it was subscribed to — deleting
+// each one's own map entry once it's left empty, same as Unsubscribe —
+// and closes its event channel. Call once, when its connection ends.
+// Without pruning empty entries, b.subs would grow unboundedly keyed by
+// whatever collection names get subscribed to: readPump passes
+// msg.Collection straight through with no validation against real
+// tables, so a client (or an attacker) cycling through many distinct,
+// possibly bogus, one-off names — subscribe, then disconnect — would
+// leave one dead, empty map entry behind per name, forever.
 func (b *Broker) Close(c *Conn) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for _, set := range b.subs {
+	for collection, set := range b.subs {
 		delete(set, c)
+		if len(set) == 0 {
+			delete(b.subs, collection)
+		}
 	}
 	close(c.events)
 }
