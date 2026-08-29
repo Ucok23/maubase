@@ -1,13 +1,20 @@
-// Package audit is the owner plane's audit trail: a durable, append-only
-// record of security-relevant actions taken through /admin/* — logins
-// (successful and failed), logouts, and owner-account create/delete.
+// Package audit is maubase's audit trail: a durable, append-only record of
+// security-relevant actions, both owner-plane (/admin/* — logins,
+// logouts, owner-account create/delete) and customer-plane (/api/auth/* —
+// signup, login, logout, password reset, social sign-in, self-service
+// account deletion). Both planes share one log and one admin-only
+// `/admin/audit-log` view: an incident review or compliance audit rarely
+// cares which plane an action happened on, only who did what and when,
+// and a customer account is exactly the kind of thing an admin is asking
+// "was this compromised?" about. See spec/owner-plane.md's "Audit log"
+// section for the owner-plane scenarios this backs, and
+// spec/cross-cutting.md's AUDIT-CUST-01 for the customer-plane ones.
 //
-// Entries are deliberately independent of internal/ownerauth's tables: an
-// actor or target's identity (id + email) is copied into the entry at
-// write time rather than referenced by a foreign key, so the entry stays
-// meaningful — including naming exactly who did what to whom — even after
-// that account is later deleted. See spec/owner-plane.md's "Audit log"
-// section for the exact scenarios this backs.
+// Entries are deliberately independent of internal/ownerauth's and
+// internal/auth's own tables: an actor or target's identity (id + email)
+// is copied into the entry at write time rather than referenced by a
+// foreign key, so the entry stays meaningful — including naming exactly
+// who did what to whom — even after that account is later deleted.
 package audit
 
 import (
@@ -44,6 +51,27 @@ const (
 	EventUserCreate          = "user_create"
 	EventUserDelete          = "user_delete"
 	EventUserSessionsRevoked = "user_sessions_revoked"
+
+	// Customer-plane events (spec/cross-cutting.md AUDIT-CUST-01). Named
+	// distinctly from their owner-plane counterparts above (customer_login
+	// vs. login) even where the shape is identical, so an admin scanning
+	// the shared log can always tell which plane produced a given entry
+	// without inspecting actor/target.
+	EventCustomerSignup                 = "customer_signup"
+	EventCustomerLogin                  = "customer_login"
+	EventCustomerLoginFailed            = "customer_login_failed"
+	EventCustomerLogout                 = "customer_logout"
+	EventCustomerPasswordResetRequested = "customer_password_reset_requested"
+	EventCustomerPasswordResetCompleted = "customer_password_reset_completed"
+	EventCustomerAccountDeleted         = "customer_account_deleted"
+	// EventCustomerSocialSignIn covers every outcome
+	// LoginOrCreateViaSocial can produce (a new account created, an
+	// existing identity signing back in, or a provider linked to the
+	// caller's already-signed-in account) — distinguished by this entry's
+	// metadata (`new_account`, `already_signed_in`) rather than by three
+	// separate event names, since "a social sign-in happened" is the fact
+	// an incident review asks for first.
+	EventCustomerSocialSignIn = "customer_social_sign_in"
 )
 
 // Actor identifies who performed an action. A failed login has no known

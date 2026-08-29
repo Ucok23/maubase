@@ -442,19 +442,26 @@ func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword strin
 //     sign-in method": the currently-authenticated identity is
 //     authoritative, so a matching email on some other unrelated account
 //     is irrelevant here (unlike the anonymous path's case 2).
-func (s *Service) LoginOrCreateViaSocial(ctx context.Context, provider, providerUserID, email, currentUserID string) (*Session, error) {
+//
+// newAccount reports whether case 3 of the anonymous path fired (a brand
+// new account was created, not just linked to or signed into an existing
+// one) — the one fact about this resolution an audit entry needs that
+// isn't already evident from currentUserID alone. See
+// spec/cross-cutting.md AUDIT-CUST-01.
+func (s *Service) LoginOrCreateViaSocial(ctx context.Context, provider, providerUserID, email, currentUserID string) (session *Session, newAccount bool, err error) {
 	var linkedUserID string
-	err := s.db.QueryRowContext(ctx, `
+	err = s.db.QueryRowContext(ctx, `
 		SELECT user_id FROM social_identities WHERE provider = ? AND provider_user_id = ?
 	`, provider, providerUserID).Scan(&linkedUserID)
 	switch {
 	case err == nil:
 		if currentUserID != "" && linkedUserID != currentUserID {
-			return nil, ErrSocialIdentityLinkedElsewhere
+			return nil, false, ErrSocialIdentityLinkedElsewhere
 		}
-		return s.createSession(ctx, linkedUserID)
+		session, err = s.createSession(ctx, linkedUserID)
+		return session, false, err
 	case !errors.Is(err, sql.ErrNoRows):
-		return nil, fmt.Errorf("lookup social identity: %w", err)
+		return nil, false, fmt.Errorf("lookup social identity: %w", err)
 	}
 
 	// Not linked to anyone yet.
@@ -472,10 +479,11 @@ func (s *Service) LoginOrCreateViaSocial(ctx context.Context, provider, provider
 		case errors.Is(err, sql.ErrNoRows):
 			userID, email, err = s.createUserForSocialSignIn(ctx, provider, providerUserID, email)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
+			newAccount = true
 		case err != nil:
-			return nil, fmt.Errorf("lookup user by email: %w", err)
+			return nil, false, fmt.Errorf("lookup user by email: %w", err)
 		}
 	}
 
@@ -487,9 +495,10 @@ func (s *Service) LoginOrCreateViaSocial(ctx context.Context, provider, provider
 	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO social_identities (id, user_id, provider, provider_user_id, email) VALUES (?, ?, ?, ?, ?)
 	`, uuid.NewString(), userID, provider, providerUserID, email); err != nil {
-		return nil, fmt.Errorf("link social identity: %w", err)
+		return nil, false, fmt.Errorf("link social identity: %w", err)
 	}
-	return s.createSession(ctx, userID)
+	session, err = s.createSession(ctx, userID)
+	return session, newAccount, err
 }
 
 // createUserForSocialSignIn handles LoginOrCreateViaSocial's case 3.
