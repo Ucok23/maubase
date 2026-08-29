@@ -122,6 +122,18 @@ can sign in normally at `/api/auth/login`.
 When a viewer-role owner submits the same form directly (bypassing the
 UI), the response is `403` and no account is created.
 
+## ADMINUI-43: Creating a user with an already-registered email re-shows the form with an error, not a 500
+Given a customer account already exists for `taken@example.com`,
+when a developer+ owner submits the create-user form with that same
+email,
+then the response is `200` with the same page re-rendered — never a
+`500` — showing `SignUp`'s `IDNT-02` uniqueness error inline, no second
+account is created for that email, and no `user_create` audit entry is
+written for the failed attempt (the audit call sits after the error
+return in `handleCreateUser`, so only a genuinely successful creation
+is ever recorded). Probably the single most likely real-world admin
+mistake with this form, and previously never exercised.
+
 ## ADMINUI-28: A developer+ owner can force-delete a customer account
 Given the users page's delete control for an account,
 when a developer+ owner submits it,

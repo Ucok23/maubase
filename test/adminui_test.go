@@ -805,6 +805,41 @@ func TestAdminUI_DeveloperCanCreateUserViewerCannot(t *testing.T) {
 	}
 }
 
+// TestAdminUI_CreateUserWithTakenEmailReshowsFormNotError exercises
+// ADMINUI-43: probably the single most likely real-world admin mistake
+// with this form — creating a user for an email that's already
+// registered — was never exercised, nor was it verified that a failed
+// creation produces no misleading user_create audit entry.
+func TestAdminUI_CreateUserWithTakenEmailReshowsFormNotError(t *testing.T) {
+	// ADMINUI-43
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	signUp(t, newClient(t), baseURL, "adminui43-taken@example.com", "correcthorse")
+
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	resp, err := owner.PostForm(baseURL+"/admin/ui/users", url.Values{
+		"email": {"adminui43-taken@example.com"}, "password": {"newpassword1"},
+	})
+	if err != nil {
+		t.Fatalf("POST /admin/ui/users: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create user with taken email: want 200 (form re-shown), got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+	body := bodyString(t, resp)
+	if !strings.Contains(body, "already registered") {
+		t.Fatalf("want the uniqueness error shown inline, got: %s", body)
+	}
+
+	// No user_create entry for the failed attempt.
+	entries := auditLog(t, owner, baseURL)
+	if e := findAuditEntry(entries, "user_create", "adminui43-taken@example.com"); e != nil {
+		t.Fatalf("want no user_create entry for the failed attempt, got %v", e)
+	}
+}
+
 func TestAdminUI_DeveloperCanForceDeleteUserViewerCannot(t *testing.T) {
 	// ADMINUI-28
 	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
