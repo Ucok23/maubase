@@ -15,8 +15,14 @@ import (
 // socialStateCookieName carries the CSRF state token across the redirect
 // to the provider and back — short-lived (5 minutes is generous for a
 // human to complete a login), cleared as soon as the callback reads it
-// regardless of outcome.
-const socialStateCookieName = "maubase_social_state"
+// regardless of outcome. Namespaced by provider name: a browser that
+// starts "google" (state A) then, before finishing, starts "github"
+// (state B) must not have the github flow's cookie clobber google's —
+// each provider gets its own cookie, so either flow can still complete
+// later using its own, untouched state (spec/social-login.md SOCIAL-08).
+func socialStateCookieName(provider string) string {
+	return "maubase_social_state_" + provider
+}
 
 // handleSocialStart begins "Continue with <provider>": generates a
 // random state, stashes it in a cookie, and redirects to the provider's
@@ -25,7 +31,8 @@ const socialStateCookieName = "maubase_social_state"
 // the same as a provider name that doesn't exist at all — see
 // spec/social-login.md SOCIAL-05.
 func (s *Server) handleSocialStart(w http.ResponseWriter, r *http.Request) {
-	provider, ok := s.socialProviders[chi.URLParam(r, "provider")]
+	providerName := chi.URLParam(r, "provider")
+	provider, ok := s.socialProviders[providerName]
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -37,7 +44,7 @@ func (s *Server) handleSocialStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name: socialStateCookieName, Value: state, Path: "/",
+		Name: socialStateCookieName(providerName), Value: state, Path: "/",
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: 300,
 	})
 	http.Redirect(w, r, provider.AuthCodeURL(state), http.StatusSeeOther)
@@ -50,14 +57,15 @@ func (s *Server) handleSocialStart(w http.ResponseWriter, r *http.Request) {
 // auth.Service.LoginOrCreateViaSocial, and redirects to
 // Server.socialLoginRedirect with the session cookie already set.
 func (s *Server) handleSocialCallback(w http.ResponseWriter, r *http.Request) {
-	provider, ok := s.socialProviders[chi.URLParam(r, "provider")]
+	providerName := chi.URLParam(r, "provider")
+	provider, ok := s.socialProviders[providerName]
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 
-	cookie, cookieErr := r.Cookie(socialStateCookieName)
-	clearSocialStateCookie(w)
+	cookie, cookieErr := r.Cookie(socialStateCookieName(providerName))
+	clearSocialStateCookie(w, providerName)
 	if cookieErr != nil || r.URL.Query().Get("state") == "" || r.URL.Query().Get("state") != cookie.Value {
 		http.Error(w, "invalid or missing state", http.StatusBadRequest)
 		return
@@ -118,9 +126,9 @@ func (s *Server) handleSocialCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, s.socialLoginRedirect, http.StatusSeeOther)
 }
 
-func clearSocialStateCookie(w http.ResponseWriter) {
+func clearSocialStateCookie(w http.ResponseWriter, providerName string) {
 	http.SetCookie(w, &http.Cookie{
-		Name: socialStateCookieName, Value: "", Path: "/", MaxAge: -1,
+		Name: socialStateCookieName(providerName), Value: "", Path: "/", MaxAge: -1,
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
 	})
 }

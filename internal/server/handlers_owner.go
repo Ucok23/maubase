@@ -230,6 +230,8 @@ func writeOwnerAuthError(w http.ResponseWriter, err error) {
 		status = http.StatusBadRequest
 	case errors.Is(err, ownerauth.ErrLastOwner):
 		status = http.StatusConflict
+	case errors.Is(err, ownerauth.ErrOwnerNotFound):
+		status = http.StatusNotFound
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }

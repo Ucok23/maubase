@@ -1,11 +1,14 @@
 package e2e_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
+	"maubase/internal/email"
 	"maubase/internal/testserver"
 )
 
@@ -110,6 +113,105 @@ func TestMaintenance_PurgeSessionsIsAuditLogged(t *testing.T) {
 	if e["actor_email"] != bootstrapEmail {
 		t.Fatalf("want the calling admin as actor, got %v", e)
 	}
+}
+
+func TestMaintenance_PurgeSessionsAlsoPurgesExpiredOrUsedResetTokens(t *testing.T) {
+	// MAINT-07
+	sender := email.NewFakeSender()
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		EmailSender: sender,
+	})
+	admin := newClient(t)
+	ownerLogin(t, admin, baseURL, bootstrapEmail, bootstrapPassword)
+
+	// Still outstanding, unredeemed — must survive the purge.
+	signUp(t, newClient(t), baseURL, "maint07-outstanding@example.com", "correcthorse")
+	forgotPassword(t, newClient(t), baseURL, "maint07-outstanding@example.com")
+	outstandingToken := tokenFromResetLink(t, sender.Sent())
+
+	// Already redeemed — must be purged.
+	signUp(t, newClient(t), baseURL, "maint07-used@example.com", "correcthorse")
+	forgotPassword(t, newClient(t), baseURL, "maint07-used@example.com")
+	usedToken := tokenFromResetLink(t, sender.Sent())
+	if resp := resetPassword(t, baseURL, usedToken, "brandnewpassword1"); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("setup: redeem token: want 204, got %d", resp.StatusCode)
+	}
+
+	// Already expired — must be purged.
+	signUp(t, newClient(t), baseURL, "maint07-expired@example.com", "correcthorse")
+	forgotPassword(t, newClient(t), baseURL, "maint07-expired@example.com")
+	sqlResp, err := admin.PostForm(baseURL+"/admin/ui/sql", url.Values{
+		"query": {"UPDATE password_reset_tokens SET expires_at = '2000-01-01 00:00:00' WHERE user_id = (SELECT id FROM users WHERE email = 'maint07-expired@example.com')"},
+	})
+	if err != nil {
+		t.Fatalf("backdate token via SQL Studio: %v", err)
+	}
+	if sqlResp.StatusCode != http.StatusOK {
+		t.Fatalf("SQL Studio update: want 200, got %d: %s", sqlResp.StatusCode, bodyString(t, sqlResp))
+	}
+
+	countBefore := sqlStudioCount(t, admin, baseURL, "SELECT COUNT(*) FROM password_reset_tokens")
+	if countBefore != 3 {
+		t.Fatalf("setup: want 3 reset token rows before purging, got %d", countBefore)
+	}
+
+	resp := purgeSessions(t, admin, baseURL)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("purge: want 200, got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+	body := decodeJSONMap(t, resp)
+	purged, _ := body["reset_tokens_purged"].(float64)
+	if purged != 2 {
+		t.Fatalf("want reset_tokens_purged=2 (the used and expired ones), got %v: %v", body["reset_tokens_purged"], body)
+	}
+
+	countAfter := sqlStudioCount(t, admin, baseURL, "SELECT COUNT(*) FROM password_reset_tokens")
+	if countAfter != 1 {
+		t.Fatalf("want exactly 1 reset token row left after purging, got %d", countAfter)
+	}
+
+	entries := auditLog(t, admin, baseURL)
+	e := findAuditEntry(entries, "sessions_purged", "")
+	if e == nil {
+		t.Fatalf("want a sessions_purged entry in the audit log, got %v", entries)
+	}
+	meta, _ := e["metadata"].(map[string]any)
+	if resetTokens, _ := meta["reset_tokens"].(float64); resetTokens != 2 {
+		t.Fatalf("want reset_tokens: 2 in the audit entry's metadata, got %v", meta)
+	}
+
+	// The still-outstanding token survived and still redeems normally.
+	final := resetPassword(t, baseURL, outstandingToken, "stilloutstanding1")
+	if final.StatusCode != http.StatusNoContent {
+		t.Fatalf("outstanding token after purge: want 204, got %d: %s", final.StatusCode, bodyString(t, final))
+	}
+}
+
+// sqlStudioCount runs a SELECT COUNT(*) ... query via SQL Studio and
+// parses the single integer result out of the rendered results table.
+func sqlStudioCount(t *testing.T, client *http.Client, baseURL, query string) int {
+	t.Helper()
+	resp, err := client.PostForm(baseURL+"/admin/ui/sql", url.Values{"query": {query}})
+	if err != nil {
+		t.Fatalf("SQL Studio query: %v", err)
+	}
+	body := bodyString(t, resp)
+	// The results table renders one <td>...</td> holding the count.
+	idx := strings.Index(body, "<td>")
+	if idx < 0 {
+		t.Fatalf("want a <td> result cell in SQL Studio output, got: %s", body)
+	}
+	rest := body[idx+len("<td>"):]
+	end := strings.Index(rest, "</td>")
+	if end < 0 {
+		t.Fatalf("malformed result cell in SQL Studio output: %s", body)
+	}
+	var n int
+	if _, err := fmt.Sscan(rest[:end], &n); err != nil {
+		t.Fatalf("parse count %q: %v", rest[:end], err)
+	}
+	return n
 }
 
 func TestMaintenance_LoginRateLimitRejectsExcessAttempts(t *testing.T) {

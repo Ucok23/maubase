@@ -589,6 +589,65 @@ func TestAdminUI_SQLStudioAuditsEveryRun(t *testing.T) {
 	}
 }
 
+// TestAdminUI_SQLStudioAuditQueryTruncationBoundary exercises the
+// off-by-one boundary in truncateQuery (500 chars + a "…" marker) that
+// ADMINUI-20 promises for "very long" statements but no existing test
+// ever approached: both prior SQL Studio tests run short, one-line
+// queries nowhere near it.
+func TestAdminUI_SQLStudioAuditQueryTruncationBoundary(t *testing.T) {
+	// ADMINUI-42
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	// Exactly 500 chars: at the boundary, not over it — must NOT be
+	// truncated (truncateQuery's own len(q) <= n check).
+	atBoundary := "E500:" + strings.Repeat("a", 495)
+	if len(atBoundary) != 500 {
+		t.Fatalf("test setup: want a 500-char query, got %d", len(atBoundary))
+	}
+	// One char over: must be truncated to exactly 500 chars plus "…".
+	overBoundary := "E501:" + strings.Repeat("b", 496)
+	if len(overBoundary) != 501 {
+		t.Fatalf("test setup: want a 501-char query, got %d", len(overBoundary))
+	}
+
+	owner.PostForm(baseURL+"/admin/ui/sql", url.Values{"query": {atBoundary}})
+	owner.PostForm(baseURL+"/admin/ui/sql", url.Values{"query": {overBoundary}})
+
+	entries := auditLog(t, owner, baseURL)
+	var atEntry, overEntry map[string]any
+	for _, e := range entries {
+		if e["event"] != "sql_executed" {
+			continue
+		}
+		meta, _ := e["metadata"].(map[string]any)
+		q, _ := meta["query"].(string)
+		switch {
+		case strings.HasPrefix(q, "E500:"):
+			atEntry = meta
+		case strings.HasPrefix(q, "E501:"):
+			overEntry = meta
+		}
+	}
+	if atEntry == nil {
+		t.Fatalf("want an audit entry for the 500-char query, got entries: %v", entries)
+	}
+	if overEntry == nil {
+		t.Fatalf("want an audit entry for the 501-char query, got entries: %v", entries)
+	}
+
+	atQuery, _ := atEntry["query"].(string)
+	if atQuery != atBoundary {
+		t.Fatalf("want the 500-char query stored verbatim (untruncated), got %d chars: %q", len(atQuery), atQuery)
+	}
+	overQuery, _ := overEntry["query"].(string)
+	wantOverQuery := overBoundary[:500] + "…"
+	if overQuery != wantOverQuery {
+		t.Fatalf("want the 501-char query truncated to exactly 500 chars plus \"…\", got %d chars: %q", len(overQuery), overQuery)
+	}
+}
+
 func TestAdminUI_AuditLogPageRendersMetadata(t *testing.T) {
 	// ADMINUI-37
 	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
@@ -798,6 +857,41 @@ func TestAdminUI_DeveloperCanCreateUserViewerCannot(t *testing.T) {
 	}
 	if blocked.StatusCode != http.StatusForbidden {
 		t.Fatalf("viewer create user: want 403, got %d", blocked.StatusCode)
+	}
+}
+
+// TestAdminUI_CreateUserWithTakenEmailReshowsFormNotError exercises
+// ADMINUI-43: probably the single most likely real-world admin mistake
+// with this form — creating a user for an email that's already
+// registered — was never exercised, nor was it verified that a failed
+// creation produces no misleading user_create audit entry.
+func TestAdminUI_CreateUserWithTakenEmailReshowsFormNotError(t *testing.T) {
+	// ADMINUI-43
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	signUp(t, newClient(t), baseURL, "adminui43-taken@example.com", "correcthorse")
+
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	resp, err := owner.PostForm(baseURL+"/admin/ui/users", url.Values{
+		"email": {"adminui43-taken@example.com"}, "password": {"newpassword1"},
+	})
+	if err != nil {
+		t.Fatalf("POST /admin/ui/users: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create user with taken email: want 200 (form re-shown), got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+	body := bodyString(t, resp)
+	if !strings.Contains(body, "already registered") {
+		t.Fatalf("want the uniqueness error shown inline, got: %s", body)
+	}
+
+	// No user_create entry for the failed attempt.
+	entries := auditLog(t, owner, baseURL)
+	if e := findAuditEntry(entries, "user_create", "adminui43-taken@example.com"); e != nil {
+		t.Fatalf("want no user_create entry for the failed attempt, got %v", e)
 	}
 }
 
