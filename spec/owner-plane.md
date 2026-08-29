@@ -255,3 +255,17 @@ account is created. `Role.IsValid()`/`ErrInvalidRole` exist specifically
 for this, and `writeOwnerAuthError` already maps `ErrInvalidRole` to
 `400` — this was true by construction but never actually exercised on
 either the JSON or HTML admin-ui surface.
+
+## OWNR-27: A malformed or garbage owner session cookie value is a clean 401
+Given a request carrying a `maubase_owner_session` cookie whose value is
+garbage — an empty string, an extremely long random string, or a value
+shaped like a SQL-metacharacter injection attempt — never a value this
+deployment actually issued,
+when it's presented to `GET /admin/auth/me` (or any other authenticated
+`/admin/*` route),
+then the response is `401`, the same as no cookie at all — never a
+`500`. `ValidateSession` hashes the raw token and looks it up via a
+parameterized query, so this was very likely already safe by
+construction, but untested — cheap insurance against a future refactor
+that starts handling the raw token unsafely (string-concatenated into a
+query, say).
