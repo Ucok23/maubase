@@ -1,12 +1,12 @@
 {{define "maintenance"}}{{template "header" .}}
 <div class="card" style="max-width:520px">
 <h3>Purge expired sessions</h3>
-<p>Purges session rows whose expiry has already passed — pure storage hygiene, not something that changes what a valid or expired session can do. A background job already does this periodically; see spec/maintenance.md.</p>
+<p>Purges session rows whose expiry has already passed, plus password-reset tokens that have already expired or been redeemed — pure storage hygiene, not something that changes what a valid session or token can do. A background job already does this periodically; see spec/maintenance.md.</p>
 <form method="POST" action="/admin/ui/maintenance/purge-sessions">
 <button type="submit" class="btn btn-primary">Purge expired sessions</button>
 </form>
 {{if .Purged}}
-<div class="alert alert-info" style="margin-top:16px">Purged <strong>{{.SessionsPurged}}</strong> customer session(s) and <strong>{{.OwnerSessionsPurged}}</strong> owner session(s).</div>
+<div class="alert alert-info" style="margin-top:16px">Purged <strong>{{.SessionsPurged}}</strong> customer session(s), <strong>{{.OwnerSessionsPurged}}</strong> owner session(s), and <strong>{{.ResetTokensPurged}}</strong> reset token(s).</div>
 {{end}}
 </div>
 {{template "footer" .}}{{end}}
