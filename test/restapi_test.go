@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"maubase/internal/testserver"
@@ -258,6 +259,45 @@ func TestRestAPI_UpdateOnlyChangesSentFields(t *testing.T) {
 	}
 	if updRec["body"] != "original body" {
 		t.Fatalf("want body untouched, got %v", updRec)
+	}
+}
+
+func TestRestAPI_ConcurrentPatchesToDisjointFieldsBothLand(t *testing.T) {
+	// REST-CRUD-05
+	baseURL := testserver.NewWithSchema(t, notesSchema)
+	token := restToken(t, baseURL, "concurrent-patch@example.com", []string{"records:read", "records:write"})
+
+	created := doAuthed(t, http.MethodPost, baseURL+"/api/data/notes", token, map[string]any{
+		"title": "original title", "body": "original body",
+	})
+	rec := decodeJSONMap(t, created)
+	id := rec["id"].(string)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		resp := doAuthed(t, http.MethodPatch, baseURL+"/api/data/notes/"+id, token, map[string]any{"title": "new title"})
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("patch title: want 200, got %d: %s", resp.StatusCode, bodyString(t, resp))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		resp := doAuthed(t, http.MethodPatch, baseURL+"/api/data/notes/"+id, token, map[string]any{"body": "new body"})
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("patch body: want 200, got %d: %s", resp.StatusCode, bodyString(t, resp))
+		}
+	}()
+	wg.Wait()
+
+	final := doAuthed(t, http.MethodGet, baseURL+"/api/data/notes/"+id, token, nil)
+	finalRec := decodeJSONMap(t, final)
+	if finalRec["title"] != "new title" {
+		t.Fatalf("want title updated regardless of interleaving, got %v", finalRec)
+	}
+	if finalRec["body"] != "new body" {
+		t.Fatalf("want body updated regardless of interleaving, got %v", finalRec)
 	}
 }
 

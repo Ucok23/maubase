@@ -468,3 +468,45 @@ func mustRequest(t *testing.T, method, url string) *http.Request {
 	}
 	return req
 }
+
+func TestIdentity_BearerTokenWinsOverCookieWhenBothPresent(t *testing.T) {
+	// IDNT-18
+	baseURL := testserver.NewWithSchema(t, notesSchema)
+
+	// A signs up (which auto-logs-in and sets a session cookie in A's own
+	// jar — see handleSignUp).
+	clientA := newClient(t)
+	signUp(t, clientA, baseURL, "idnt18-a@example.com", "correcthorse")
+
+	// B signs up too, then its raw session token is pulled straight out
+	// of its own cookie jar, so it can be replayed as a Bearer header on
+	// a request that also carries A's cookie.
+	clientB := newClient(t)
+	signUp(t, clientB, baseURL, "idnt18-b@example.com", "correcthorse")
+	var bToken string
+	for _, c := range clientB.Jar.Cookies(mustURL(t, baseURL)) {
+		if c.Name == "maubase_session" {
+			bToken = c.Value
+		}
+	}
+	if bToken == "" {
+		t.Fatalf("setup: couldn't find B's session cookie in its own jar")
+	}
+
+	req := mustRequest(t, http.MethodGet, baseURL+"/api/auth/me")
+	req.Header.Set("Authorization", "Bearer "+bToken)
+	for _, c := range clientA.Jar.Cookies(mustURL(t, baseURL)) {
+		req.AddCookie(c)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/auth/me: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+	me := decodeJSONMap(t, resp)
+	if me["email"] != "idnt18-b@example.com" {
+		t.Fatalf("want the bearer token's account (B) to win over the cookie's (A), got %v", me)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 
@@ -503,6 +504,30 @@ func TestOwner_ExpiredSessionRejected(t *testing.T) {
 	}
 	if me.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("want 401 for an expired owner session, got %d: %s", me.StatusCode, bodyString(t, me))
+	}
+}
+
+// TestOwner_DeletingNonexistentOwnerIsCleanNotFound exercises OWNR-25:
+// DeleteOwner's row lookup used to wrap sql.ErrNoRows as a generic
+// fmt.Errorf, which writeOwnerAuthError had no case for and so fell
+// through to a 500 leaking the raw "sql: no rows in result set" string.
+func TestOwner_DeletingNonexistentOwnerIsCleanNotFound(t *testing.T) {
+	// OWNR-25
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	req, _ := http.NewRequest(http.MethodDelete, baseURL+"/admin/owners/does-not-exist", nil)
+	resp, err := owner.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /admin/owners/does-not-exist: %v", err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("want 404, got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+	body := decodeJSONMap(t, resp)
+	if msg, _ := body["error"].(string); strings.Contains(msg, "sql:") || strings.Contains(msg, "no rows") {
+		t.Fatalf("want a clean error message, got a leaked internal error: %v", body)
 	}
 }
 

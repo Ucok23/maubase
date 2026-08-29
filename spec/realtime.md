@@ -178,6 +178,26 @@ out the current subscriber list, then sends to each with a non-blocking
 of that, an OS socket buffer it isn't draining) can never make a write
 wait on it.
 
+## RT-13: Subscribing to a collection leaves no trace behind once every subscriber is gone
+Given a collection name with no subscribers left — either every
+connection that had subscribed to it called `Unsubscribe`, or every
+connection that had subscribed to it closed (`Broker.Close`) — for any
+collection name at all, including one that was never a real table
+(`readPump` passes `msg.Collection` straight through with no validation
+against the actual schema, so this includes attacker-controlled,
+one-off, bogus strings),
+then `Broker.subs` has no entry for that name at all afterward, not an
+empty-but-present map — `Unsubscribe` and `Close` both delete a
+collection's own entry the moment its subscriber set becomes empty.
+Before this, only individual connections were ever removed from a
+collection's set, never the collection's entry itself once emptied: a
+client (or attacker) cycling through many distinct, possibly bogus,
+one-off collection names — subscribe, then disconnect, repeat — left
+one dead, empty map entry behind per name, forever, growing `Broker`'s
+memory unboundedly and keyed by strings the caller fully controls. Not
+an acute DoS (each entry is tiny), but unbounded growth with no upper
+bound is exactly the kind of thing that eventually becomes one.
+
 ## Known limitation: cross-process policy-change skew (multi-process only)
 
 Each maubase process holds its own independently-`Discover()`'d
