@@ -169,3 +169,16 @@ the collection's rule currently is, for exactly as long as that
 connection stays open. A deployment narrowing a collection from
 `read: shared` to `read: owner` (or the reverse) takes effect for every
 open subscription immediately, with no need for clients to reconnect.
+
+## ACCESS-13: A `_policies` row naming a collection that isn't exposed is rejected at startup, distinctly from ACCESS-08
+Given a `_policies` row whose `collection` doesn't match any exposed
+collection — misspelled, a reserved/internal table, or a table
+`Discover` skipped for lacking a single-column primary key — for any
+operation and any rule (not specifically `owner`),
+when the server starts,
+then it refuses to start with an error naming the collection and
+operation and saying no such collection is exposed, distinct from
+ACCESS-08's "owner rule needs owner_id" message — `applyPolicies` checks
+that the named collection resolves at all *before* it ever looks at
+whether the declared rule is `owner`, so a misspelled or nonexistent
+name never reaches ACCESS-08's check in the first place.

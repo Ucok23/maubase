@@ -360,6 +360,49 @@ func TestSocialLogin_RejectsIdentityAlreadyLinkedElsewhere(t *testing.T) {
 	}
 }
 
+// TestSocialLogin_SecondProviderDoesNotBreakFirstsInFlightCallback
+// exercises SOCIAL-11: the state cookie is namespaced per provider, so
+// starting a second provider's flow can't clobber a first, still-open
+// one's cookie — a plausible two-tab or change-your-mind sequence on a
+// login screen offering more than one "Continue with X" button.
+func TestSocialLogin_SecondProviderDoesNotBreakFirstsInFlightCallback(t *testing.T) {
+	// SOCIAL-11
+	googleProvider := fakeGoogleProvider(t, "google-uid-multi", "multi-google@example.com")
+	githubProvider := fakeGitHubProvider(t, 555, "multi-github@example.com", "multi-github@example.com")
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		SocialProviders: map[string]social.Provider{"google": googleProvider, "github": githubProvider},
+	})
+	client := newClient(t)
+
+	// Start google, then — before finishing it — also start github. Both
+	// state cookies must coexist in the same client's jar.
+	stateGoogle := startSocialLogin(t, client, baseURL, "google")
+	stateGithub := startSocialLogin(t, client, baseURL, "github")
+	if stateGoogle == stateGithub {
+		t.Fatalf("setup: want two distinct state values, got the same for both")
+	}
+
+	// The original google callback, completing after github's flow
+	// started, still succeeds — its cookie was never touched by
+	// starting a different provider's flow.
+	googleResp := socialCallback(t, client, baseURL, "google", "fake-code-google", stateGoogle)
+	if googleResp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("google callback after github started: want 303, got %d: %s", googleResp.StatusCode, bodyString(t, googleResp))
+	}
+	if email := meEmail(t, client, baseURL); email != "multi-google@example.com" {
+		t.Fatalf("want the google account signed in, got email %q", email)
+	}
+
+	// The github flow, completed afterward on a fresh (signed-out)
+	// client using its own state, also still works independently.
+	returning := newClient(t)
+	stateGithub2 := startSocialLogin(t, returning, baseURL, "github")
+	githubResp := socialCallback(t, returning, baseURL, "github", "fake-code-github", stateGithub2)
+	if githubResp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("github callback: want 303, got %d: %s", githubResp.StatusCode, bodyString(t, githubResp))
+	}
+}
+
 // mustGet is a small convenience so tests above stay one line at each
 // call site — GET a URL with client and fail the test on any transport
 // error, without asserting on status (callers that care check it

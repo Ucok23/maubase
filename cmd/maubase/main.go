@@ -139,10 +139,11 @@ func run() error {
 
 // runSessionJanitor periodically purges expired rows from the customer-
 // and owner-plane session tables (see auth.Service/ownerauth.Service's
-// PurgeExpiredSessions) until ctx is canceled. Expired sessions already
-// fail validation on their own, so a missed or slow tick is harmless —
-// this is storage hygiene, not a correctness requirement. Also reachable
-// on demand via POST /admin/maintenance/purge-sessions.
+// PurgeExpiredSessions), plus expired or already-used password-reset
+// tokens (PurgeExpiredResetTokens), until ctx is canceled. None of these
+// rows ever do anything once expired/used — this is storage hygiene, not
+// a correctness requirement, so a missed or slow tick is harmless. Also
+// reachable on demand via POST /admin/maintenance/purge-sessions.
 func runSessionJanitor(ctx context.Context, authSvc *auth.Service, ownerSvc *ownerauth.Service, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -160,6 +161,11 @@ func runSessionJanitor(ctx context.Context, authSvc *auth.Service, ownerSvc *own
 				log.Printf("session janitor: purge owner sessions: %v", err)
 			} else if n > 0 {
 				log.Printf("session janitor: purged %d expired owner session(s)", n)
+			}
+			if n, err := authSvc.PurgeExpiredResetTokens(ctx); err != nil {
+				log.Printf("session janitor: purge reset tokens: %v", err)
+			} else if n > 0 {
+				log.Printf("session janitor: purged %d expired/used reset token(s)", n)
 			}
 		}
 	}

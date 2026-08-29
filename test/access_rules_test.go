@@ -265,6 +265,26 @@ func TestAccessRules_OwnerRuleWithoutOwnerColumnFailsAtStartup(t *testing.T) {
 	}
 }
 
+func TestAccessRules_PolicyOnUnexposedCollectionFailsAtStartup(t *testing.T) {
+	// ACCESS-13
+	err := testserver.NewCustomExpectingDiscoverError(t, testserver.Options{
+		Schema: []string{tagsSchema, policyRow("tagz", "read", "shared")},
+	})
+	if err == nil {
+		t.Fatalf("want an error, got none")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "tagz") || !strings.Contains(msg, "no such exposed collection") {
+		t.Fatalf("want the error to name the bogus collection and say no such exposed collection, got: %v", err)
+	}
+	// Distinct failure mode from ACCESS-08: this message never mentions
+	// owner_id, since applyPolicies never gets far enough to check the
+	// rule against the (nonexistent) collection's columns at all.
+	if strings.Contains(msg, "owner_id") {
+		t.Fatalf("want ACCESS-13's error to be the unexposed-collection message, not ACCESS-08's owner_id message: %v", err)
+	}
+}
+
 func TestAccessRules_AccountErasureIgnoresDeletePolicy(t *testing.T) {
 	// ACCESS-11
 	baseURL := testserver.NewWithSchema(t, notesSchema,
