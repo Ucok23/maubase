@@ -7,6 +7,14 @@
 <div class="field"><label>Created</label><div>{{.User.CreatedAt.Format "2006-01-02 15:04:05"}}</div></div>
 <div class="field"><label>Updated</label><div>{{.User.UpdatedAt.Format "2006-01-02 15:04:05"}}</div></div>
 <div class="field"><label>Active sessions</label><div>{{.SessionCount}}</div></div>
+<div class="field"><label>Linked social identities</label><div>
+{{if .SocialIdentities}}
+{{range .SocialIdentities}}<div>{{.Provider}}{{if .Email}} ({{.Email}}){{end}} — linked {{.CreatedAt.Format "2006-01-02 15:04:05"}}</div>{{end}}
+{{else}}
+<span class="meta-line">none</span>
+{{end}}
+</div></div>
+<div class="field"><label>Pending reset tokens</label><div>{{.PendingResetTokens}}{{if .PendingResetTokens}} <span class="meta-line">(unredeemed, not yet expired — a possible takeover-in-progress signal)</span>{{end}}</div></div>
 </div>
 
 {{if .CanWrite}}

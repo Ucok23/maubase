@@ -21,3 +21,13 @@ type Session struct {
 	Token     string // raw token, only ever populated right after creation
 	ExpiresAt time.Time
 }
+
+// SocialIdentity is one linked social-login provider identity for a user
+// (spec/social-login.md SOCIAL-09) — an alternate way into the account,
+// which is exactly why the admin UI's user-detail page surfaces it
+// (spec/admin-ui.md ADMINUI-26).
+type SocialIdentity struct {
+	Provider  string
+	Email     string // as reported by the provider; may be empty
+	CreatedAt time.Time
+}

@@ -197,6 +197,50 @@ func (s *Service) CountActiveSessions(ctx context.Context, userID string) (int, 
 	return n, nil
 }
 
+// ListSocialIdentities returns every social-login provider linked to
+// userID, newest first — shown on the admin UI's user-detail page
+// (ADMINUI-26) so an admin investigating a reportedly-compromised account
+// can see whether it has an alternate way in.
+func (s *Service) ListSocialIdentities(ctx context.Context, userID string) ([]SocialIdentity, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT provider, email, created_at FROM social_identities WHERE user_id = ? ORDER BY created_at DESC
+	`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list social identities: %w", err)
+	}
+	defer rows.Close()
+
+	var out []SocialIdentity
+	for rows.Next() {
+		var si SocialIdentity
+		var email sql.NullString
+		if err := rows.Scan(&si.Provider, &email, &si.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan social identity: %w", err)
+		}
+		si.Email = email.String
+		out = append(out, si)
+	}
+	return out, rows.Err()
+}
+
+// CountPendingResetTokens reports how many outstanding, unredeemed,
+// not-yet-expired password reset tokens userID currently has — shown on
+// the admin UI's user-detail page (ADMINUI-26) as a possible
+// takeover-in-progress signal. Matches the exact validity check
+// ResetPassword itself applies (used_at IS NULL, not yet expired): a
+// token that's already been redeemed or has expired can't be used to
+// take the account over, so it isn't counted here either.
+func (s *Service) CountPendingResetTokens(ctx context.Context, userID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM password_reset_tokens WHERE user_id = ? AND used_at IS NULL AND expires_at > ?
+	`, userID, time.Now()).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count pending reset tokens: %w", err)
+	}
+	return n, nil
+}
+
 // RevokeAllSessions deletes every session belonging to userID — "sign out
 // everywhere" for one customer account, without deleting the account
 // itself (spec/admin-ui.md ADMINUI-29). Returns how many were revoked.

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"maubase/internal/email"
+	"maubase/internal/social"
 	"maubase/internal/testserver"
 )
 
@@ -752,6 +754,59 @@ func TestAdminUI_UserDetailShowsProfileAndSessionCount(t *testing.T) {
 	}
 	if !strings.Contains(body, "Active sessions") {
 		t.Fatalf("want an active-session count shown, got: %s", body)
+	}
+	// ADMINUI-26 (extended): with no linked identities or pending reset
+	// tokens, the page says so explicitly rather than showing an empty
+	// or missing section.
+	if !strings.Contains(body, "none") {
+		t.Fatalf("want \"none\" shown for social identities with none linked, got: %s", body)
+	}
+	if !strings.Contains(body, "Pending reset tokens</label><div>0") {
+		t.Fatalf("want a pending-reset-tokens count of 0 shown, got: %s", body)
+	}
+}
+
+func TestAdminUI_UserDetailShowsLinkedSocialIdentityAndPendingResetToken(t *testing.T) {
+	// ADMINUI-26 (extended)
+	provider := fakeGoogleProvider(t, "google-uid-admindetail", "wont-be-used-for-matching@example.com")
+	sender := email.NewFakeSender()
+	baseURL := testserver.NewCustom(t, testserver.Options{
+		BootstrapOwnerEmail: bootstrapEmail, BootstrapOwnerPassword: bootstrapPassword,
+		SocialProviders: map[string]social.Provider{"google": provider},
+		EmailSender:     sender,
+	})
+
+	customer := newClient(t)
+	signUp(t, customer, baseURL, "adminui-detail-social@example.com", "userpassword1")
+	me := decodeJSONMap(t, mustGet(t, customer, baseURL+"/api/auth/me"))
+	id, _ := me["id"].(string)
+
+	// Link a social identity to this same, already-signed-in account
+	// (SOCIAL-09's flow).
+	state := startSocialLogin(t, customer, baseURL, "google")
+	linkResp := socialCallback(t, customer, baseURL, "google", "fake-code", state)
+	if linkResp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("link social identity: want 303, got %d: %s", linkResp.StatusCode, bodyString(t, linkResp))
+	}
+
+	// Leave one outstanding, unredeemed reset token.
+	forgotResp := forgotPassword(t, newClient(t), baseURL, "adminui-detail-social@example.com")
+	if forgotResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("forgot-password: want 204, got %d: %s", forgotResp.StatusCode, bodyString(t, forgotResp))
+	}
+
+	owner := newClient(t)
+	adminUILogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+	resp := doGetNoRedirect(t, owner, baseURL+"/admin/ui/users/"+id)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("user detail: want 200, got %d", resp.StatusCode)
+	}
+	body := bodyString(t, resp)
+	if !strings.Contains(body, "google") {
+		t.Fatalf("want the linked google identity shown, got: %s", body)
+	}
+	if !strings.Contains(body, "Pending reset tokens</label><div>1") {
+		t.Fatalf("want a pending-reset-tokens count of 1 shown, got: %s", body)
 	}
 }
 

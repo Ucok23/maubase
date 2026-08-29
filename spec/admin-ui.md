@@ -102,12 +102,22 @@ when a viewer+ owner visits `/admin/ui/users`,
 then every account's id, email, and created_at appear, newest first,
 paginated the same way the data browser and audit log already are.
 
-## ADMINUI-26: A user's detail view shows their profile and session count
+## ADMINUI-26: A user's detail view shows their profile, session count, linked social identities, and pending reset tokens
 Given a customer account,
 when a viewer+ owner visits `/admin/ui/users/{id}`,
 then their id, email, created_at, updated_at, and current active session
 count are shown, alongside the delete and revoke-sessions controls gated
 per ADMINUI-28/29.
+Also shown: every social-login provider linked to the account
+(`social_identities`, SOCIAL-09) — an alternate way in an admin
+investigating a reportedly-compromised account needs to see without
+resorting to SQL Studio — and the count of outstanding, unredeemed,
+not-yet-expired password reset tokens (a possible takeover-in-progress
+signal), using the exact same validity check `ResetPassword` itself
+applies. An account with neither shows "none" for identities and `0`
+for pending tokens, not an empty/missing section — this page is the
+purpose-built place to check both, so their absence should read as "we
+checked, there are none," not as the page simply not knowing.
 
 ## ADMINUI-27: A developer+ owner can create a customer account directly from the UI
 Given the users page's create-user form (email + password),
