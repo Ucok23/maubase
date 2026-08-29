@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 
@@ -503,5 +504,93 @@ func TestOwner_ExpiredSessionRejected(t *testing.T) {
 	}
 	if me.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("want 401 for an expired owner session, got %d: %s", me.StatusCode, bodyString(t, me))
+	}
+}
+
+// TestOwner_DeletingNonexistentOwnerIsCleanNotFound exercises OWNR-25:
+// DeleteOwner's row lookup used to wrap sql.ErrNoRows as a generic
+// fmt.Errorf, which writeOwnerAuthError had no case for and so fell
+// through to a 500 leaking the raw "sql: no rows in result set" string.
+func TestOwner_DeletingNonexistentOwnerIsCleanNotFound(t *testing.T) {
+	// OWNR-25
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	req, _ := http.NewRequest(http.MethodDelete, baseURL+"/admin/owners/does-not-exist", nil)
+	resp, err := owner.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /admin/owners/does-not-exist: %v", err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("want 404, got %d: %s", resp.StatusCode, bodyString(t, resp))
+	}
+	body := decodeJSONMap(t, resp)
+	if msg, _ := body["error"].(string); strings.Contains(msg, "sql:") || strings.Contains(msg, "no rows") {
+		t.Fatalf("want a clean error message, got a leaked internal error: %v", body)
+	}
+}
+
+// TestOwner_CreatingWithInvalidRoleIsRejected exercises OWNR-26:
+// Role.IsValid()/ErrInvalidRole exist specifically for this, and
+// writeOwnerAuthError already maps ErrInvalidRole to 400, but nothing
+// ever actually called CreateOwner with a bad role to prove it.
+func TestOwner_CreatingWithInvalidRoleIsRejected(t *testing.T) {
+	// OWNR-26
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	for _, role := range []string{"superadmin", ""} {
+		resp := createOwner(t, owner, baseURL, "ownr26-"+role+"@example.com", "correcthorse", role)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("role %q: want 400, got %d: %s", role, resp.StatusCode, bodyString(t, resp))
+		}
+	}
+
+	// Neither attempt created an account: the list still shows only the
+	// bootstrapped owner.
+	list, err := owner.Get(baseURL + "/admin/owners")
+	if err != nil {
+		t.Fatalf("GET /admin/owners: %v", err)
+	}
+	var out []map[string]any
+	if err := json.NewDecoder(list.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	list.Body.Close()
+	if len(out) != 1 {
+		t.Fatalf("want no account created by either invalid-role attempt, got %d accounts: %v", len(out), out)
+	}
+}
+
+// TestOwner_MalformedSessionCookieRejectedCleanly exercises OWNR-27:
+// ValidateSession hashes the raw token and looks it up via a
+// parameterized query, so this was very likely already safe, but
+// nothing ever actually threw garbage at it to prove there's no path to
+// a 500.
+func TestOwner_MalformedSessionCookieRejectedCleanly(t *testing.T) {
+	// OWNR-27
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+
+	garbageValues := []string{
+		"",
+		strings.Repeat("a", 10000),
+		"'; DROP TABLE owner_sessions; --",
+		"' OR '1'='1",
+	}
+	for _, v := range garbageValues {
+		req, err := http.NewRequest(http.MethodGet, baseURL+"/admin/auth/me", nil)
+		if err != nil {
+			t.Fatalf("build request: %v", err)
+		}
+		req.AddCookie(&http.Cookie{Name: "maubase_owner_session", Value: v})
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET /admin/auth/me with garbage cookie: %v", err)
+		}
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("garbage cookie %q: want 401, got %d: %s", v, resp.StatusCode, bodyString(t, resp))
+		}
 	}
 }

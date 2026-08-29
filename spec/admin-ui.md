@@ -379,6 +379,19 @@ long) — unlike every other audited action here, which only logs the
 consequential ones, raw SQL logs every attempt, since the point is a
 complete record of who ran what against the database directly.
 
+## ADMINUI-42: The audit-log query truncation boundary is exact
+Given `truncateQuery`'s 500-character limit,
+when a submitted statement is exactly 500 characters,
+then the audit entry's `query` metadata stores it verbatim, with no
+`…` marker appended — `truncateQuery`'s own `len(q) <= n` check means
+"at the limit" isn't "over" it.
+When a submitted statement is 501 characters — one over — instead,
+then the stored value is exactly the first 500 characters plus a
+trailing `…`, never 501 characters, never missing the marker. Every
+existing SQL Studio test ran short, one-line queries nowhere near this
+boundary, leaving both the exact-500 and the off-by-one-over cases
+completely uncovered.
+
 ## Security posture
 
 The admin UI's entire CSRF defense is `SameSite=Lax` on the owner

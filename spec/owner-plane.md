@@ -229,3 +229,43 @@ since it was written, but no scenario anywhere ever actually exercised
 this for the owner plane specifically — the only expiry-adjacent test
 checks that a *customer* session survives a purge unaffected, never the
 owner-plane rejection path itself.
+
+## OWNR-25: Deleting a nonexistent owner is a clean 404, not a leaked internal error
+Given an id that doesn't correspond to any owner-plane account (never
+existed, or was already deleted by an earlier request),
+when a signed-in owner calls `DELETE /admin/owners/{id}`,
+then the response is `404` with a plain "owner not found" message —
+never a `500` with the underlying SQL error string leaked into the
+response body. `GetOwner`/`DeleteOwner`'s row lookup returns
+`ErrOwnerNotFound` for this case specifically, which
+`writeOwnerAuthError` maps to `404`; before this, `sql.ErrNoRows` was
+wrapped as a generic `fmt.Errorf("lookup owner: %w", err)` with no
+`errors.Is` case matching it, so it fell through the same handler's
+default and surfaced as `{"error":"lookup owner: sql: no rows in
+result set"}` — a raw internal error string leaked to the client for
+the mundane, everyday case of deleting an id that's already gone.
+
+## OWNR-26: Creating an owner account with an invalid role string is rejected
+Given a signed-in `owner`-role account,
+when they `POST /admin/owners` with `role: "superadmin"` (anything
+outside the closed `viewer`/`developer`/`admin`/`owner` vocabulary,
+including an empty string),
+then the response is `400` with `ErrInvalidRole`'s message, and no
+account is created. `Role.IsValid()`/`ErrInvalidRole` exist specifically
+for this, and `writeOwnerAuthError` already maps `ErrInvalidRole` to
+`400` — this was true by construction but never actually exercised on
+either the JSON or HTML admin-ui surface.
+
+## OWNR-27: A malformed or garbage owner session cookie value is a clean 401
+Given a request carrying a `maubase_owner_session` cookie whose value is
+garbage — an empty string, an extremely long random string, or a value
+shaped like a SQL-metacharacter injection attempt — never a value this
+deployment actually issued,
+when it's presented to `GET /admin/auth/me` (or any other authenticated
+`/admin/*` route),
+then the response is `401`, the same as no cookie at all — never a
+`500`. `ValidateSession` hashes the raw token and looks it up via a
+parameterized query, so this was very likely already safe by
+construction, but untested — cheap insurance against a future refactor
+that starts handling the raw token unsafely (string-concatenated into a
+query, say).

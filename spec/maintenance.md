@@ -33,6 +33,24 @@ when they `POST /admin/maintenance/purge-sessions`,
 then a `sessions_purged` entry appears in `GET /admin/audit-log` with
 that admin as actor.
 
+## MAINT-07: Purging sessions also purges expired or already-used password-reset tokens
+Given one or more `password_reset_tokens` rows that are either already
+expired or already redeemed (neither kind ever redeems again — see
+`spec/password-reset.md` PWRESET-05/06), and one that's still
+outstanding and unredeemed,
+when a signed-in owner-plane admin calls
+`POST /admin/maintenance/purge-sessions`,
+then the response's `reset_tokens_purged` count reflects exactly the
+expired-or-used rows removed, the still-outstanding token is untouched
+and still redeems normally afterward, and the audit log's
+`sessions_purged` entry's metadata includes `reset_tokens` alongside
+`sessions`/`owner_sessions`. Before this scenario, nothing ever deleted
+from this table at all — every forgot-password request left a
+permanent row, an unbounded-growth security-sensitive table (holds a
+`user_id` and a token hash) on any long-lived deployment with moderate
+forgot-password traffic. The background janitor purges these
+periodically too, same as it already does for expired sessions.
+
 ## Login rate-limiting
 
 Every endpoint that submits a password against `auth.Service.Login` or
