@@ -222,6 +222,23 @@ func (s *Service) PurgeExpiredSessions(ctx context.Context) (int64, error) {
 	return res.RowsAffected()
 }
 
+// PurgeExpiredResetTokens deletes every password_reset_tokens row that's
+// either already expired or already redeemed, and reports how many were
+// removed. Neither kind ever redeems again (ResetPassword itself rejects
+// both — spec/password-reset.md PWRESET-05/06), so like
+// PurgeExpiredSessions this is pure storage hygiene, not something that
+// changes any externally observable behavior — but unlike sessions,
+// nothing deleted this table at all before: every forgot-password
+// request left a permanent row, holding a user_id and a token hash
+// forever on a long-lived deployment.
+func (s *Service) PurgeExpiredResetTokens(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM password_reset_tokens WHERE expires_at <= ? OR used_at IS NOT NULL`, time.Now())
+	if err != nil {
+		return 0, fmt.Errorf("purge expired reset tokens: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 // CreateResetToken issues a password-reset token for the account with
 // the given email, if one exists. ok is false (with no error) when it
 // doesn't — a normal, expected outcome the HTTP handler uses to decide

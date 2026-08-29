@@ -47,6 +47,27 @@ when it's `DELETE`d,
 then the response is `204`,
 and a subsequent `GET` for that same id is `404`.
 
+## REST-CRUD-05: Concurrent PATCHes to disjoint fields both land; overlapping fields are last-write-wins with no ordering guarantee
+Given an existing record,
+when two `PATCH` requests for the same id, each naming a different
+field, are sent concurrently,
+then both fields end up updated, deterministically — `handleUpdate`
+builds one `UPDATE ... SET col = ?` statement per request naming only
+the fields *that* request sent, so each request is a single independent
+SQL statement, not a read-modify-write cycle; SQLite's own single-writer
+serialization (`internal/db.Open`'s `SetMaxOpenConns(1)`) settles which
+runs first, and it doesn't matter which does, since neither statement's
+`SET` clause touches the other's column at all.
+But when both requests instead name the *same* field with different
+values,
+then the record ends up with whichever value's `UPDATE` statement
+committed last — last-write-wins, with no ordering guarantee this spec
+makes about which of the two concurrent requests that is. A future
+refactor away from per-field `SET` clauses (e.g. a full-row
+replace-on-PATCH) could silently break the disjoint-field guarantee
+above without touching this one, which is why the two are stated
+separately here.
+
 ## REST-OWNERSHIP-01: A user only ever sees their own rows in a list
 Given two different customer users, each with a record in the same
 owner-scoped table,
