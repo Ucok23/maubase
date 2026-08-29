@@ -244,3 +244,14 @@ wrapped as a generic `fmt.Errorf("lookup owner: %w", err)` with no
 default and surfaced as `{"error":"lookup owner: sql: no rows in
 result set"}` — a raw internal error string leaked to the client for
 the mundane, everyday case of deleting an id that's already gone.
+
+## OWNR-26: Creating an owner account with an invalid role string is rejected
+Given a signed-in `owner`-role account,
+when they `POST /admin/owners` with `role: "superadmin"` (anything
+outside the closed `viewer`/`developer`/`admin`/`owner` vocabulary,
+including an empty string),
+then the response is `400` with `ErrInvalidRole`'s message, and no
+account is created. `Role.IsValid()`/`ErrInvalidRole` exist specifically
+for this, and `writeOwnerAuthError` already maps `ErrInvalidRole` to
+`400` — this was true by construction but never actually exercised on
+either the JSON or HTML admin-ui surface.

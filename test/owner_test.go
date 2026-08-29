@@ -530,3 +530,36 @@ func TestOwner_DeletingNonexistentOwnerIsCleanNotFound(t *testing.T) {
 		t.Fatalf("want a clean error message, got a leaked internal error: %v", body)
 	}
 }
+
+// TestOwner_CreatingWithInvalidRoleIsRejected exercises OWNR-26:
+// Role.IsValid()/ErrInvalidRole exist specifically for this, and
+// writeOwnerAuthError already maps ErrInvalidRole to 400, but nothing
+// ever actually called CreateOwner with a bad role to prove it.
+func TestOwner_CreatingWithInvalidRoleIsRejected(t *testing.T) {
+	// OWNR-26
+	baseURL := testserver.NewWithOwner(t, bootstrapEmail, bootstrapPassword)
+	owner := newClient(t)
+	ownerLogin(t, owner, baseURL, bootstrapEmail, bootstrapPassword)
+
+	for _, role := range []string{"superadmin", ""} {
+		resp := createOwner(t, owner, baseURL, "ownr26-"+role+"@example.com", "correcthorse", role)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("role %q: want 400, got %d: %s", role, resp.StatusCode, bodyString(t, resp))
+		}
+	}
+
+	// Neither attempt created an account: the list still shows only the
+	// bootstrapped owner.
+	list, err := owner.Get(baseURL + "/admin/owners")
+	if err != nil {
+		t.Fatalf("GET /admin/owners: %v", err)
+	}
+	var out []map[string]any
+	if err := json.NewDecoder(list.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	list.Body.Close()
+	if len(out) != 1 {
+		t.Fatalf("want no account created by either invalid-role attempt, got %d accounts: %v", len(out), out)
+	}
+}
