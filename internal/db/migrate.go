@@ -215,6 +215,68 @@ func MigrateDirDown(sqlDB *sql.DB, dir string, n int) ([]string, error) {
 	return reverted, nil
 }
 
+// MigrateDirRedo reverts the n most recently applied application
+// migrations (exactly like MigrateDirDown, including its error behavior
+// for a migration with no "-- +migrate Down" section) and then
+// immediately reapplies exactly those same migrations, in their
+// original forward order. This is deliberately narrower than "revert n,
+// then run a general apply-everything-pending Up": a migration that was
+// already pending before Redo ran (never applied, so never reverted)
+// is left untouched, not swept up into this call just because Up would
+// otherwise apply it too. Returns the filenames redone, in forward
+// order (always non-nil). If a migration can't be reverted, Redo stops
+// there — same as Down — and reapplies nothing.
+func MigrateDirRedo(sqlDB *sql.DB, dir string, n int) ([]string, error) {
+	reverted, err := MigrateDirDown(sqlDB, dir, n)
+	if err != nil {
+		return nil, err
+	}
+
+	// reverted is newest-first; redo reapplies oldest-first (the reverse)
+	// so the schema is rebuilt in the same order it was originally built.
+	redone := make([]string, 0, len(reverted))
+	for i := len(reverted) - 1; i >= 0; i-- {
+		name := reverted[i]
+		if err := applyOneMigration(sqlDB, dir, name); err != nil {
+			return redone, fmt.Errorf("reapply migration %s: %w", name, err)
+		}
+		redone = append(redone, name)
+	}
+	return redone, nil
+}
+
+// applyOneMigration applies (or reapplies, after MigrateDirDown reverted
+// it) a single named migration file's Up section and records it, in one
+// transaction. Unlike applyMigrations, it doesn't check whether the
+// migration is already recorded as applied — callers (MigrateDirRedo)
+// are responsible for calling this only on a migration they know isn't
+// currently applied.
+func applyOneMigration(sqlDB *sql.DB, dir, name string) error {
+	content, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		return fmt.Errorf("read migration %s: %w", name, err)
+	}
+	up, _, _ := splitMigrationSQL(string(content))
+	version := "app:" + name
+
+	tx, err := sqlDB.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx for %s: %w", name, err)
+	}
+	if _, err := tx.Exec(up); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("apply migration %s: %w", name, err)
+	}
+	if _, err := tx.Exec(`INSERT INTO schema_migrations (version) VALUES (?)`, version); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("record migration %s: %w", name, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration %s: %w", name, err)
+	}
+	return nil
+}
+
 const (
 	migrateUpMarker   = "-- +migrate Up"
 	migrateDownMarker = "-- +migrate Down"

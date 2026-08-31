@@ -10,8 +10,8 @@ which the server always applies itself on boot regardless of this
 command.
 
 This is part of the fuller migration tooling tracked in issue #144
-(`redo`, targeting a specific version, checksum verification, and drift
-capture from the admin UI/SQL Studio) — `new`, `up`, `down`, and `status`
+(targeting a specific version, checksum verification, and drift capture
+from the admin UI/SQL Studio) — `new`, `up`, `down`, `redo`, and `status`
 exist so far.
 
 A migration file's forward SQL goes under a `-- +migrate Up` marker line;
@@ -102,8 +102,8 @@ instead of falling back to `MAUBASE_DB_PATH` / `MAUBASE_MIGRATIONS_DIR`
 holds whether the flags come before or after its optional `n` argument.
 
 ## MIGCLI-07: An unrecognized `migrate` subcommand fails clearly without touching the database
-Given `maubase migrate <x>` where `<x>` isn't `new`, `up`, `down`, or
-`status`,
+Given `maubase migrate <x>` where `<x>` isn't `new`, `up`, `down`,
+`redo`, or `status`,
 when it runs,
 then it exits non-zero with an error naming the unrecognized subcommand,
 and never opens (or creates) the database file at all.
@@ -167,3 +167,34 @@ Given `maubase migrate down --bogus-flag`, or any other unrecognized
 when it runs,
 then it fails with an error naming the unrecognized flag rather than
 misparsing it as the optional `n` argument.
+
+## MIGCLI-20: `maubase migrate redo` reverts then reapplies the most recently applied migration by default
+Given a migration has been applied, with a Down section,
+when an operator runs `maubase migrate redo` with no argument,
+then it reverts that migration's schema change and immediately reapplies
+it (its Up SQL runs again, and it's re-recorded as applied), reporting
+it as "redone".
+
+## MIGCLI-21: `maubase migrate redo <n>` redoes the last n applied migrations, reapplied in original forward order
+Given three migrations have been applied, each with a Down section,
+when an operator runs `maubase migrate redo 2`,
+then it reverts the two most recently applied ones (newest first, same
+as `down 2`) and reapplies them in their original forward order —
+oldest of the two first — leaving the oldest (untouched) migration
+applied throughout.
+
+## MIGCLI-22: `redo` never touches a migration that was never applied
+Given a migration exists on disk but has never been applied (still
+pending), alongside migrations that have been applied,
+when an operator runs `maubase migrate redo` (with an `n` that only
+covers the already-applied ones),
+then the pending migration is left exactly as it was — still pending,
+not applied as a side effect of `redo`'s internal use of `up`-like
+apply logic.
+
+## MIGCLI-23: `redo` fails and reapplies nothing when a migration has no Down section
+Given the migration `redo` would need to revert has no `-- +migrate
+Down` section,
+when an operator runs `maubase migrate redo`,
+then it fails the same way `down` would on that migration, and
+reapplies nothing — the migration is left applied exactly as before.

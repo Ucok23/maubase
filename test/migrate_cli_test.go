@@ -14,7 +14,7 @@ import (
 	maubasedb "maubase/internal/db"
 )
 
-// Scenarios: spec/migrations-cli.md (MIGCLI-01..19)
+// Scenarios: spec/migrations-cli.md (MIGCLI-01..23)
 //
 // Unlike every other test in this package (which talks HTTP to an
 // in-process testserver), these exercise `maubase migrate ...` as an
@@ -530,5 +530,116 @@ func TestMigrateCLI_DownUnrecognizedFlagFailsClearly(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "--bogus-flag") {
 		t.Fatalf("want the error to name the unrecognized flag, got: %s", stderr)
+	}
+}
+
+func TestMigrateCLI_RedoRevertsAndReappliesMostRecentByDefault(t *testing.T) {
+	// MIGCLI-20
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_a.sql", upDownMigration(`CREATE TABLE a (id INTEGER PRIMARY KEY);`, `DROP TABLE a;`))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "redo")
+	if code != 0 {
+		t.Fatalf("migrate redo: want exit 0, got %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "0001_create_a.sql") {
+		t.Fatalf("want the migration reported redone, got: %s", stdout)
+	}
+	if !tableExists(t, dbPath, "a") {
+		t.Fatalf("want table a to exist after redo (reapplied)")
+	}
+	status, stderr, code := runMigrateCLI(t, dbPath, dir, "status")
+	if code != 0 {
+		t.Fatalf("migrate status: want exit 0, got %d: %s", code, stderr)
+	}
+	if !strings.Contains(status, "applied") || !strings.Contains(status, "0001_create_a.sql") {
+		t.Fatalf("want 0001 reported applied after redo, got: %s", status)
+	}
+}
+
+func TestMigrateCLI_RedoNReappliesInOriginalForwardOrder(t *testing.T) {
+	// MIGCLI-21
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_a.sql", upDownMigration(`CREATE TABLE a (id INTEGER PRIMARY KEY);`, `DROP TABLE a;`))
+	writeMigrationFile(t, dir, "0002_create_b.sql", upDownMigration(`CREATE TABLE b (id INTEGER PRIMARY KEY);`, `DROP TABLE b;`))
+	writeMigrationFile(t, dir, "0003_create_c.sql", upDownMigration(`CREATE TABLE c (id INTEGER PRIMARY KEY);`, `DROP TABLE c;`))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "redo", "2")
+	if code != 0 {
+		t.Fatalf("migrate redo 2: want exit 0, got %d: %s", code, stderr)
+	}
+	// Reapplied oldest-of-the-two first: 0002 before 0003.
+	first := strings.Index(stdout, "0002_create_b.sql")
+	second := strings.Index(stdout, "0003_create_c.sql")
+	if first < 0 || second < 0 || first > second {
+		t.Fatalf("want 0002 redone before 0003 (original forward order), got: %s", stdout)
+	}
+	if !tableExists(t, dbPath, "a") || !tableExists(t, dbPath, "b") || !tableExists(t, dbPath, "c") {
+		t.Fatalf("want all three tables to exist after redo")
+	}
+}
+
+func TestMigrateCLI_RedoNeverTouchesAMigrationThatWasNeverApplied(t *testing.T) {
+	// MIGCLI-22
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_a.sql", upDownMigration(`CREATE TABLE a (id INTEGER PRIMARY KEY);`, `DROP TABLE a;`))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+	// Added after 0001 was applied; never applied itself.
+	writeMigrationFile(t, dir, "0002_never_applied.sql", `-- +migrate Up
+CREATE TABLE b (id INTEGER PRIMARY KEY);
+`)
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "redo")
+	if code != 0 {
+		t.Fatalf("migrate redo: want exit 0, got %d: %s", code, stderr)
+	}
+	if strings.Contains(stdout, "0002_never_applied.sql") {
+		t.Fatalf("want redo to leave the never-applied migration alone, got: %s", stdout)
+	}
+	if tableExists(t, dbPath, "b") {
+		t.Fatalf("want table b to NOT exist — redo must not have applied the pending migration as a side effect")
+	}
+
+	status, stderr, code := runMigrateCLI(t, dbPath, dir, "status")
+	if code != 0 {
+		t.Fatalf("migrate status: want exit 0, got %d: %s", code, stderr)
+	}
+	idx := strings.Index(status, "0002_never_applied.sql")
+	if idx < 0 || !strings.HasPrefix(status[max(0, idx-9):idx], "pending") {
+		t.Fatalf("want 0002 still reported pending, got: %s", status)
+	}
+}
+
+func TestMigrateCLI_RedoFailsAndReappliesNothingWithNoDownSection(t *testing.T) {
+	// MIGCLI-23
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_no_down.sql", `-- +migrate Up
+CREATE TABLE a (id INTEGER PRIMARY KEY);
+`)
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+
+	_, stderr, code := runMigrateCLI(t, dbPath, dir, "redo")
+	if code == 0 {
+		t.Fatalf("want a non-zero exit when the migration to redo has no down section")
+	}
+	if !strings.Contains(stderr, "0001_no_down.sql") {
+		t.Fatalf("want the error to name the un-revertible migration, got: %s", stderr)
+	}
+	if !tableExists(t, dbPath, "a") {
+		t.Fatalf("want table a left untouched (still applied) after the failed redo")
 	}
 }
