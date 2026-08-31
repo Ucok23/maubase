@@ -14,7 +14,7 @@ import (
 	maubasedb "maubase/internal/db"
 )
 
-// Scenarios: spec/migrations-cli.md (MIGCLI-01..28)
+// Scenarios: spec/migrations-cli.md (MIGCLI-01..34)
 //
 // Unlike every other test in this package (which talks HTTP to an
 // in-process testserver), these exercise `maubase migrate ...` as an
@@ -844,5 +844,163 @@ func TestMigrateCLI_NewWithNoFlagsCreatesMigrationsRelativeToCWD(t *testing.T) {
 	wantPath := filepath.Join(projectDir, "migrations", "0001_create_posts.sql")
 	if _, err := os.Stat(wantPath); err != nil {
 		t.Fatalf("want %s to exist (migrations/ created relative to the project dir): %v", wantPath, err)
+	}
+}
+
+func threeMigrationsWithDown(t *testing.T, dir string) {
+	t.Helper()
+	writeMigrationFile(t, dir, "0001_create_a.sql", upDownMigration(`CREATE TABLE a (id INTEGER PRIMARY KEY);`, `DROP TABLE a;`))
+	writeMigrationFile(t, dir, "0002_create_b.sql", upDownMigration(`CREATE TABLE b (id INTEGER PRIMARY KEY);`, `DROP TABLE b;`))
+	writeMigrationFile(t, dir, "0003_create_c.sql", upDownMigration(`CREATE TABLE c (id INTEGER PRIMARY KEY);`, `DROP TABLE c;`))
+}
+
+func TestMigrateCLI_ToAppliesForwardToAnAheadTarget(t *testing.T) {
+	// MIGCLI-29
+	dir := t.TempDir()
+	threeMigrationsWithDown(t, dir)
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "to", "0001_create_a.sql"); code != 0 {
+		t.Fatalf("setup: migrate to 0001: want 0, got %d: %s", code, stderr)
+	}
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "to", "0003_create_c.sql")
+	if code != 0 {
+		t.Fatalf("migrate to 0003: want exit 0, got %d: %s", code, stderr)
+	}
+	first := strings.Index(stdout, "0002_create_b.sql")
+	second := strings.Index(stdout, "0003_create_c.sql")
+	if first < 0 || second < 0 || first > second {
+		t.Fatalf("want 0002 applied before 0003, got: %s", stdout)
+	}
+	if !tableExists(t, dbPath, "a") || !tableExists(t, dbPath, "b") || !tableExists(t, dbPath, "c") {
+		t.Fatalf("want all three tables to exist")
+	}
+}
+
+func TestMigrateCLI_ToRevertsBackToABehindTarget(t *testing.T) {
+	// MIGCLI-30
+	dir := t.TempDir()
+	threeMigrationsWithDown(t, dir)
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "to", "0001_create_a.sql")
+	if code != 0 {
+		t.Fatalf("migrate to 0001: want exit 0, got %d: %s", code, stderr)
+	}
+	first := strings.Index(stdout, "0003_create_c.sql")
+	second := strings.Index(stdout, "0002_create_b.sql")
+	if first < 0 || second < 0 || first > second {
+		t.Fatalf("want 0003 reverted before 0002 (newest first), got: %s", stdout)
+	}
+	if tableExists(t, dbPath, "b") || tableExists(t, dbPath, "c") {
+		t.Fatalf("want tables b and c dropped")
+	}
+	if !tableExists(t, dbPath, "a") {
+		t.Fatalf("want table a (the target) left applied")
+	}
+}
+
+func TestMigrateCLI_ToCurrentStateIsANoOp(t *testing.T) {
+	// MIGCLI-31
+	dir := t.TempDir()
+	threeMigrationsWithDown(t, dir)
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "to", "0003_create_c.sql")
+	if code != 0 {
+		t.Fatalf("migrate to (already there): want exit 0, got %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "already at that version") {
+		t.Fatalf("want a no-op message, got: %s", stdout)
+	}
+}
+
+func TestMigrateCLI_ToAcceptsExactFilenameOrNumericPrefix(t *testing.T) {
+	// MIGCLI-32
+	dir := t.TempDir()
+	threeMigrationsWithDown(t, dir)
+
+	// Bare numeric prefix ("2") reaches the same result as the exact filename.
+	dbPath1 := filepath.Join(t.TempDir(), "test1.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath1, dir, "to", "0002_create_b.sql"); code != 0 {
+		t.Fatalf("to exact filename: want 0, got %d: %s", code, stderr)
+	}
+	dbPath2 := filepath.Join(t.TempDir(), "test2.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath2, dir, "to", "2"); code != 0 {
+		t.Fatalf("to numeric prefix: want 0, got %d: %s", code, stderr)
+	}
+
+	for _, dbPath := range []string{dbPath1, dbPath2} {
+		if !tableExists(t, dbPath, "a") || !tableExists(t, dbPath, "b") {
+			t.Fatalf("want a and b applied at %s", dbPath)
+		}
+		if tableExists(t, dbPath, "c") {
+			t.Fatalf("want c NOT applied at %s", dbPath)
+		}
+	}
+}
+
+func TestMigrateCLI_ToFailsClearlyWhenVersionUnresolved(t *testing.T) {
+	// MIGCLI-33
+	dir := t.TempDir()
+	threeMigrationsWithDown(t, dir)
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+
+	// No match at all.
+	_, stderr, code := runMigrateCLI(t, dbPath, dir, "to", "99")
+	if code == 0 {
+		t.Fatalf("want a non-zero exit for an unresolvable version")
+	}
+	if !strings.Contains(stderr, "99") {
+		t.Fatalf("want the error to name the unresolved version, got: %s", stderr)
+	}
+	if tableExists(t, dbPath, "a") {
+		t.Fatalf("want nothing applied when the target can't be resolved")
+	}
+
+	// Ambiguous match: two files whose numeric prefixes both equal 3.
+	dir2 := t.TempDir()
+	writeMigrationFile(t, dir2, "3_x.sql", upDownMigration(`CREATE TABLE x (id INTEGER PRIMARY KEY);`, ""))
+	writeMigrationFile(t, dir2, "0003_y.sql", upDownMigration(`CREATE TABLE y (id INTEGER PRIMARY KEY);`, ""))
+	dbPath2 := filepath.Join(t.TempDir(), "test2.db")
+	_, stderr2, code2 := runMigrateCLI(t, dbPath2, dir2, "to", "3")
+	if code2 == 0 {
+		t.Fatalf("want a non-zero exit for an ambiguous version")
+	}
+	if !strings.Contains(stderr2, "3_x.sql") || !strings.Contains(stderr2, "0003_y.sql") {
+		t.Fatalf("want the error to name both ambiguous matches, got: %s", stderr2)
+	}
+}
+
+func TestMigrateCLI_ToFailsOnNoDownSectionLeavingStateAsFarAsItGot(t *testing.T) {
+	// MIGCLI-34
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_a.sql", upDownMigration(`CREATE TABLE a (id INTEGER PRIMARY KEY);`, `DROP TABLE a;`))
+	writeMigrationFile(t, dir, "0002_no_down.sql", upDownMigration(`CREATE TABLE b (id INTEGER PRIMARY KEY);`, ""))
+	writeMigrationFile(t, dir, "0003_create_c.sql", upDownMigration(`CREATE TABLE c (id INTEGER PRIMARY KEY);`, `DROP TABLE c;`))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+
+	_, stderr, code := runMigrateCLI(t, dbPath, dir, "to", "0001_create_a.sql")
+	if code == 0 {
+		t.Fatalf("want a non-zero exit when a migration on the way has no down section")
+	}
+	if !strings.Contains(stderr, "0002_no_down.sql") {
+		t.Fatalf("want the error to name the un-revertible migration, got: %s", stderr)
+	}
+	// 0003 (newest, reverted first) succeeded before 0002 blocked the rest.
+	if tableExists(t, dbPath, "c") {
+		t.Fatalf("want table c already reverted before the failure")
+	}
+	if !tableExists(t, dbPath, "b") || !tableExists(t, dbPath, "a") {
+		t.Fatalf("want tables a and b left untouched (still applied) after the failure")
 	}
 }

@@ -98,11 +98,12 @@ What's here now (v1, step 1 of the roadmap):
     running raw `CREATE TABLE` in **SQL Studio** (`/admin/ui/sql`,
     `owner`-only). See the embedded admin UI section below for the latter
     two. The `migrations/` files can also be scaffolded, applied,
-    reverted, redone, or inspected without starting the server: `maubase
-    migrate new <name>`, `up`, `down [n]`, `redo [n]`, and `status` (see
-    `spec/migrations-cli.md`; more subcommands are tracked in #144). A
+    reverted, redone, targeted, or inspected without starting the
+    server: `maubase migrate new <name>`, `up`, `down [n]`, `redo [n]`,
+    `to <version>`, and `status` (see `spec/migrations-cli.md`; drift
+    capture from the admin UI/SQL Studio is tracked separately, #149). A
     migration's forward SQL goes under a `-- +migrate Up` marker; an
-    optional `-- +migrate Down` section is what `down`/`redo` run to
+    optional `-- +migrate Down` section is what `down`/`redo`/`to` run to
     revert it. `up`/`status` also record and check a checksum of each
     migration's content, warning (never blocking) if an already-applied
     file has been edited since it ran.
