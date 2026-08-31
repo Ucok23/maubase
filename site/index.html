@@ -68,72 +68,238 @@
     </div>
   </div>
 
-  <section class="features" id="features">
+  <section class="features-intro" id="features">
     <div class="wrap">
       <div class="section-head">
         <p class="eyebrow">What ships in the binary</p>
         <h2>Every table becomes an API. Every user gets a session. Nothing calls home.</h2>
       </div>
+    </div>
+  </section>
 
-      <div class="spec-table">
-        <div class="spec-table-head">
-          <span>Path</span>
-          <span>Feature</span>
-          <span>Detail</span>
-        </div>
+  <section class="feature-section">
+    <div class="wrap">
+      <div class="feature-copy">
+        <p class="eyebrow">/api/data/{table}</p>
+        <h2>Auto REST</h2>
+        <p class="lede">
+          Every table that isn't reserved for maubase's own use becomes
+          a full CRUD API the moment it exists — whether you created it
+          with a migration, the admin UI's create-table form, or a raw
+          <code>CREATE TABLE</code> in SQL Studio. Rows are scoped to
+          whoever created them through an <code>owner_id</code> column,
+          checked on every request: nobody sees a row they didn't
+          create unless you say otherwise with an access rule.
+        </p>
+      </div>
+      <div class="terminal">
+        <div class="terminal-title">shell</div>
+        <pre><span class="prompt">$</span> curl -X POST localhost:8080/api/data/posts \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"title": "Hello"}'
+<span class="out">{"id": "b7e1...", "title": "Hello"}</span>
 
-        <div class="spec-row">
-          <p class="path">/api/data/{table}</p>
-          <h3>Auto REST</h3>
-          <p>Create a table, get paginated CRUD for it — list, get, create, patch, delete — with row ownership via <code>owner_id</code> enforced automatically.</p>
-        </div>
+<span class="prompt">$</span> curl "localhost:8080/api/data/posts?limit=10"
+<span class="out">[{"id": "b7e1...", "title": "Hello"}]</span>
 
-        <div class="spec-row">
-          <p class="path">/oauth/*</p>
-          <h3>OAuth 2.1 server</h3>
-          <p>Let your own users authorize third-party apps — MCP clients included — against your API. PKCE mandatory, refresh tokens rotate with reuse detection.</p>
-        </div>
-
-        <div class="spec-row">
-          <p class="path">/admin/ui</p>
-          <h3>Admin UI</h3>
-          <p>Create tables, browse and edit rows, run raw SQL in a built-in studio — live, no restart, and nothing extra to deploy or host.</p>
-        </div>
-
-        <div class="spec-row">
-          <p class="path">/api/realtime</p>
-          <h3>Realtime</h3>
-          <p>Subscribe to changes on your auto-REST tables. Single-process by default; add <code>MAUBASE_REDIS_URL</code> when you run more than one.</p>
-        </div>
-
-        <div class="spec-row">
-          <p class="path">/api/storage/files</p>
-          <h3>File storage</h3>
-          <p>Upload and download endpoints gated by the same OAuth scopes as everything else — no separate object-storage service to wire up.</p>
-        </div>
-
-        <div class="spec-row">
-          <p class="path">_policies</p>
-          <h3>Row-level access rules</h3>
-          <p>Declare who can read or write a table beyond simple ownership — per role, per column — without hand-rolling middleware for it.</p>
-        </div>
-
-        <div class="spec-row">
-          <p class="path">/api/auth/social/*</p>
-          <h3>Social login</h3>
-          <p>"Continue with Google" and "Continue with GitHub," wired into the same session system as email and password — not a bolt-on.</p>
-        </div>
-
-        <div class="spec-row">
-          <p class="path">maubase migrate</p>
-          <h3>Migrations CLI</h3>
-          <p>Scaffold, apply, revert, redo, and diff your schema against what's actually applied. Version history you can read, not a black box.</p>
-        </div>
+<span class="prompt">$</span> curl -X PATCH .../api/data/posts/b7e1... \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"title": "Edited"}'<span class="cursor"></span></pre>
       </div>
     </div>
   </section>
 
-  <section class="why tone-surface" id="why">
+  <section class="feature-section flip tone-surface">
+    <div class="wrap">
+      <div class="feature-copy">
+        <p class="eyebrow">/oauth/*</p>
+        <h2>OAuth 2.1 server</h2>
+        <p class="lede">
+          Every deployment is also its own authorization server. Your
+          users can grant a third-party app — an MCP client, a script a
+          teammate wrote, a mobile app you didn't build — scoped access
+          to their own data, the same flow behind any "Sign in
+          with..." button. PKCE is mandatory, and refresh tokens rotate
+          on every use; replaying a stale one is treated as theft and
+          revokes the whole grant chain.
+        </p>
+      </div>
+      <div class="terminal">
+        <div class="terminal-title">shell</div>
+        <pre><span class="out">GET /oauth/authorize
+  ?response_type=code&amp;client_id=...
+  &amp;redirect_uri=...&amp;scope=records:read
+  &amp;code_challenge=...
+  &amp;code_challenge_method=S256</span>
+
+<span class="prompt">$</span> curl -X POST localhost:8080/oauth/token \
+  -d grant_type=authorization_code \
+  -d code=$CODE \
+  -d code_verifier=$VERIFIER \
+  -d client_id=$CLIENT_ID
+<span class="out">{"access_token": "...", "expires_in": 3600}</span><span class="cursor"></span></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature-section">
+    <div class="wrap">
+      <div class="feature-copy">
+        <p class="eyebrow">/admin/ui</p>
+        <h2>Admin UI</h2>
+        <p class="lede">
+          A server-rendered admin panel ships in the same binary as the
+          API — nothing separate to deploy, no static assets to host,
+          no extra API keys just to look at your own data. Create
+          tables live, browse and edit rows, manage owner accounts, and
+          read the audit log, all from routes the binary already
+          serves.
+        </p>
+      </div>
+      <ul class="route-list">
+        <li><code>/admin/ui/tables/new</code><span>Create a table — live, no restart</span></li>
+        <li><code>/admin/ui/sql</code><span>SQL Studio — raw queries against the live database</span></li>
+        <li><code>/admin/ui/users</code><span>Browse and edit customer rows</span></li>
+        <li><code>/admin/ui/audit-log</code><span>Every login, create, and delete — who, when</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="feature-section flip tone-surface">
+    <div class="wrap">
+      <div class="feature-copy">
+        <p class="eyebrow">/api/realtime</p>
+        <h2>Realtime</h2>
+        <p class="lede">
+          One WebSocket endpoint delivers created/updated/deleted
+          events for any auto-REST table you're allowed to read.
+          Fan-out is single-process by default, the right answer for a
+          small deployment; set <code>MAUBASE_REDIS_URL</code> once
+          you're running more than one instance and need events to
+          reach every process.
+        </p>
+      </div>
+      <div class="terminal">
+        <div class="terminal-title">js</div>
+        <pre><span class="out">const</span> ws = new WebSocket(
+  "ws://localhost:8080/api/realtime" +
+  "?access_token=" + token
+);
+ws.onopen = () =&gt; ws.send(JSON.stringify({
+  type: "subscribe", collection: "posts"
+}));
+ws.onmessage = (e) =&gt; console.log(e.data);
+<span class="out">// { type: "created", collection: "posts" }</span><span class="cursor"></span></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature-section">
+    <div class="wrap">
+      <div class="feature-copy">
+        <p class="eyebrow">/api/storage/files</p>
+        <h2>File storage</h2>
+        <p class="lede">
+          Upload and download endpoints that sit right next to the rest
+          of the API, gated by the same <code>files:read</code>/
+          <code>files:write</code> OAuth scopes as everything else — no
+          separate object-storage service, no separate credentials to
+          issue. A file belongs to whoever uploaded it, the same
+          ownership model as any other row.
+        </p>
+      </div>
+      <div class="terminal">
+        <div class="terminal-title">shell</div>
+        <pre><span class="prompt">$</span> curl -X POST .../api/storage/files \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@report.pdf"
+<span class="out">{"id": "9c4a...", "filename": "report.pdf"}</span>
+
+<span class="prompt">$</span> curl .../api/storage/files/9c4a.../content \
+  -o report.pdf<span class="cursor"></span></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature-section flip tone-surface">
+    <div class="wrap">
+      <div class="feature-copy">
+        <p class="eyebrow">_policies</p>
+        <h2>Row-level access rules</h2>
+        <p class="lede">
+          <code>owner_id</code> gets you per-row ownership for free;
+          <code>_policies</code> gets you the rest. Declare, per table
+          and per operation, whether a collection is owner-only, shared
+          read-only, or denied outright — enforced the same way
+          ownership is, without hand-rolling middleware for it.
+        </p>
+      </div>
+      <table class="policies-table">
+        <caption>_policies rows</caption>
+        <thead>
+          <tr><th scope="col">collection</th><th scope="col">operation</th><th scope="col">rule</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>comments</td><td>read</td><td>shared</td></tr>
+          <tr><td>comments</td><td>create</td><td>owner</td></tr>
+          <tr><td>invoices</td><td>read</td><td>owner</td></tr>
+          <tr><td>invoices</td><td>delete</td><td>denied</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="feature-section">
+    <div class="wrap">
+      <div class="feature-copy">
+        <p class="eyebrow">/api/auth/social/*</p>
+        <h2>Social login</h2>
+        <p class="lede">
+          "Continue with Google" and "Continue with GitHub," wired into
+          the exact same session system as email and password — not a
+          bolt-on identity provider off to the side. Each provider is
+          independently optional: leave its client ID unset and that
+          one route 404s, nothing else changes.
+        </p>
+      </div>
+      <div class="terminal">
+        <div class="terminal-title">shell</div>
+        <pre><span class="prompt">$</span> curl -i localhost:8080/api/auth/social/google
+HTTP/1.1 302 Found
+<span class="out">Location: https://accounts.google.com/o/oauth2/v2/auth?...</span><span class="cursor"></span></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature-section flip tone-surface">
+    <div class="wrap">
+      <div class="feature-copy">
+        <p class="eyebrow">maubase migrate</p>
+        <h2>Migrations CLI</h2>
+        <p class="lede">
+          Beyond scaffolding and applying migrations (see the quickstart
+          below), the same command reverts, redoes, and jumps straight
+          to a specific version — and <code>diff</code> catches schema
+          drift introduced outside any migration file, like a table
+          someone created by hand in SQL Studio.
+        </p>
+      </div>
+      <div class="terminal">
+        <div class="terminal-title">shell</div>
+        <pre><span class="prompt">$</span> maubase migrate diff
+<span class="out">unexplained  widgets  (no migration explains it)</span>
+
+<span class="prompt">$</span> maubase migrate down
+reverted 0004_add_comments_index.sql
+
+<span class="prompt">$</span> maubase migrate to 0002_create_posts.sql
+reverted 0004_add_comments_index.sql
+reverted 0003_create_comments.sql<span class="cursor"></span></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="why" id="why">
     <div class="wrap">
       <div class="why-grid">
         <div>
@@ -169,7 +335,7 @@
     </div>
   </section>
 
-  <section class="quickstart" id="quickstart">
+  <section class="quickstart tone-surface" id="quickstart">
     <div class="wrap quickstart-grid">
       <div class="section-head">
         <p class="eyebrow">From zero to an API</p>

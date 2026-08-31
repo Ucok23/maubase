@@ -365,61 +365,151 @@ section {
   font-size: clamp(1.8rem, 4vw, 2.4rem);
 }
 
-/* ---------- Feature spec table ---------- */
-/* A labeled table of rows, not a grid of equal-weight cards — the
-   point of a datasheet is that you can scan straight down one column
-   (the path) to find the row you want. */
+/* ---------- Features intro ---------- */
 
-.spec-table {
-  border-top: 1px solid var(--ink);
+.features-intro {
+  border-top: 1px solid var(--line);
+  padding-block: 3.5rem 0;
 }
 
-.spec-table-head,
-.spec-row {
+/* ---------- Feature sections ---------- */
+/* One full section per capability rather than a card grid — each gets
+   room for a real explanation and a real, working example, and the
+   copy/example pairing alternates sides (a "flip" section swaps via
+   the order property) so eight sections in a row still has rhythm
+   instead of repeating the same silhouette down the page. Alternating
+   --bg/--surface tone does the same job at a glance while scrolling. */
+
+.feature-section {
+  border-top: 1px solid var(--line);
+  padding-block: 3.5rem;
+}
+
+.feature-section .wrap {
   display: grid;
-  grid-template-columns: 13rem 12rem 1fr;
-  gap: 1.5rem;
-  padding-block: 1.1rem;
-  border-bottom: 1px solid var(--line);
+  grid-template-columns: 1fr 1fr;
+  gap: 3rem;
+  align-items: start;
 }
 
-.spec-table-head {
+.feature-section.flip .feature-copy {
+  order: 2;
+}
+
+@media (max-width: 860px) {
+  .feature-section .wrap {
+    grid-template-columns: 1fr;
+    gap: 1.75rem;
+  }
+  .feature-section.flip .feature-copy {
+    order: 0;
+  }
+}
+
+.feature-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.feature-copy h2 {
+  font-size: clamp(1.6rem, 3.4vw, 2.1rem);
+}
+
+.feature-copy .lede {
+  color: var(--ink-muted);
+  font-size: 1.02rem;
+  max-width: 46ch;
+}
+
+/* Admin UI's route directory — a GUI feature gets a directory listing
+   instead of a shell session, since there's no command to run. */
+
+.route-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.route-list li {
+  display: grid;
+  grid-template-columns: 13rem 1fr;
+  gap: 1rem;
+  padding: 0.85rem 1.1rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.92rem;
+}
+
+.route-list li:last-child {
+  border-bottom: none;
+}
+
+.route-list code {
+  color: var(--accent);
+}
+
+.route-list span {
+  color: var(--ink-muted);
+}
+
+@media (max-width: 480px) {
+  .route-list li {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+  }
+}
+
+/* _policies example — reuses the comparison table's visual language
+   (it's the same idea: rows of real data, not prose) for the one
+   feature whose "example" is literally a database table. */
+
+.policies-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+  border-top: 1px solid var(--ink);
+  border-bottom: 1px solid var(--ink);
+  background: var(--surface);
+}
+
+.policies-table caption {
   font-family: var(--font-mono);
   font-size: 0.72rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-muted);
-  border-bottom: 1px solid var(--ink);
-  padding-block: 0.6rem 0.8rem;
+  text-align: left;
+  padding: 0.75rem 1rem;
+  caption-side: top;
 }
 
-.spec-row .path {
+.policies-table th,
+.policies-table td {
+  text-align: left;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid var(--line);
   font-family: var(--font-mono);
-  font-size: 0.82rem;
-  color: var(--accent);
-  padding-top: 0.15rem;
+  font-size: 0.85rem;
 }
 
-.spec-row h3 {
-  font-size: 1.02rem;
-  font-weight: 700;
-}
-
-.spec-row p {
+.policies-table thead th {
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--ink-muted);
-  font-size: 0.96rem;
-  line-height: 1.6;
+  font-weight: 500;
+  border-bottom: 1px solid var(--ink);
 }
 
-@media (max-width: 720px) {
-  .spec-table-head {
-    display: none;
-  }
-  .spec-row {
-    grid-template-columns: 1fr;
-    gap: 0.4rem;
-    padding-block: 1.4rem;
-  }
+.policies-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.policies-table td:last-child {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 /* ---------- Why section ---------- */
