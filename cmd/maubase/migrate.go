@@ -434,6 +434,7 @@ func printMigrateUsage() {
 
 Usage:
   maubase                     Start the server
+  maubase init [dir]          Scaffold a brand new deployment (migrations/, .env.example, .gitignore)
   maubase migrate new <name>  Scaffold the next-numbered application migration file
   maubase migrate up          Apply pending application migrations
   maubase migrate down [n]    Revert the last n applied migrations (default 1)

@@ -30,3 +30,6 @@ and so a spec change makes it easy to find what needs re-verifying.
 - [access-rules.md](access-rules.md) — row-level access rules beyond `owner_id`
 - [realtime.md](realtime.md) — realtime subscriptions
 - [admin-ui.md](admin-ui.md) — the embedded admin UI
+- [cross-cutting.md](cross-cutting.md) — scenarios spanning more than one feature (e.g. cross-plane audit logging)
+- [migrations-cli.md](migrations-cli.md) — `maubase migrate` (new/up/down/redo/to/status, checksums)
+- [project-init.md](project-init.md) — `maubase init`, scaffolding a new deployment

@@ -1,8 +1,10 @@
 // Command maubase is the single-binary server: it opens the database, runs
 // migrations, and serves the HTTP API. Run with no arguments to start the
-// server; run `maubase migrate up`/`maubase migrate status` to manage a
-// deployment's own application-schema migrations without starting the
-// server (see migrate.go, spec/migrations-cli.md).
+// server; run `maubase init` to scaffold a brand new deployment (see
+// init.go, spec/project-init.md); run `maubase migrate up`/`maubase
+// migrate status` to manage a deployment's own application-schema
+// migrations without starting the server (see migrate.go,
+// spec/migrations-cli.md).
 package main
 
 import (
@@ -34,6 +36,11 @@ import (
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "init":
+			if err := runInit(os.Args[2:]); err != nil {
+				log.Fatal(err)
+			}
+			return
 		case "migrate":
 			if err := runMigrate(os.Args[2:]); err != nil {
 				log.Fatal(err)
