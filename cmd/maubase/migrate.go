@@ -24,29 +24,30 @@ import (
 // hand.
 func runMigrate(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: maubase migrate <new|up|down|redo|to|status> [--dir path] [--db path]")
+		return fmt.Errorf("usage: maubase migrate <new|up|down|redo|to|status|diff> [--dir path] [--db path]")
 	}
 	sub := args[0]
 	rest := args[1:]
 	switch sub {
 	case "new":
 		// Purely a filesystem operation — deliberately never opens (or
-		// creates) the database, unlike down/up/redo/to/status below.
+		// creates) the database, unlike down/up/redo/to/status/diff below.
 		return runMigrateNew(rest)
 	case "down", "redo":
 		return runMigrateDownOrRedo(sub, rest)
 	case "to":
 		return runMigrateTo(rest)
-	case "up", "status":
-		return runMigrateUpOrStatus(sub, rest)
+	case "up", "status", "diff":
+		return runMigrateUpStatusOrDiff(sub, rest)
 	default:
-		return fmt.Errorf("maubase migrate: unknown subcommand %q (want \"new\", \"up\", \"down\", \"redo\", \"to\", or \"status\")", sub)
+		return fmt.Errorf("maubase migrate: unknown subcommand %q (want \"new\", \"up\", \"down\", \"redo\", \"to\", \"status\", or \"diff\")", sub)
 	}
 }
 
-// runMigrateUpOrStatus is the shared setup ("up" and "status" both take
-// the same flags and open the same database) behind migrateUp/migrateStatus.
-func runMigrateUpOrStatus(sub string, args []string) error {
+// runMigrateUpStatusOrDiff is the shared setup behind "up", "status", and
+// "diff" — all three take the same flags (--db/--dir, no positional
+// argument) and open the same database.
+func runMigrateUpStatusOrDiff(sub string, args []string) error {
 	// Defaults come from the same env vars the server itself reads
 	// (MAUBASE_DB_PATH, MAUBASE_MIGRATIONS_DIR), so pointing this at a
 	// running deployment's database needs no flags at all — only a local
@@ -70,6 +71,8 @@ func runMigrateUpOrStatus(sub string, args []string) error {
 		return migrateUp(sqlDB, *dir)
 	case "status":
 		return migrateStatus(sqlDB, *dir)
+	case "diff":
+		return migrateDiff(sqlDB, *dir)
 	default:
 		// Unreachable: sub is validated by the caller.
 		return fmt.Errorf("maubase migrate: unknown subcommand %q", sub)
@@ -429,6 +432,32 @@ func migrateTo(sqlDB *sql.DB, dir, target string) error {
 	return nil
 }
 
+// migrateDiff exits non-zero (via a returned error, same as every other
+// migrate subcommand's failure convention) when drift is found — this
+// is what makes "maubase migrate diff" usable as a CI/deploy check, not
+// just an interactive report.
+func migrateDiff(sqlDB *sql.DB, dir string) error {
+	results, err := db.Diff(sqlDB, dir)
+	if err != nil {
+		return err
+	}
+	if len(results) == 0 {
+		fmt.Println("no drift: every live table is accounted for by an applied migration")
+		return nil
+	}
+	for _, r := range results {
+		switch r.Kind {
+		case "unexplained":
+			fmt.Printf("unexplained  %s  (exists in the database, not accounted for by any applied migration)\n", r.Table)
+		case "missing":
+			fmt.Printf("missing      %s  (an applied migration should have created this table, but it doesn't exist)\n", r.Table)
+		case "altered":
+			fmt.Printf("altered      %s  (live definition differs from what its migration(s) produced)\n", r.Table)
+		}
+	}
+	return fmt.Errorf("drift found in %d table(s), see above", len(results))
+}
+
 func printMigrateUsage() {
 	fmt.Fprint(os.Stderr, `maubase: a self-hostable backend
 
@@ -441,6 +470,7 @@ Usage:
   maubase migrate redo [n]    Revert then reapply the last n applied migrations (default 1)
   maubase migrate to <ver>    Move to exactly <ver> (a filename or numeric prefix), forward or back
   maubase migrate status      List application migrations and whether each is applied
+  maubase migrate diff        Report tables the database has that no applied migration explains (or vice versa)
   maubase help                Show this message
 
 A migration file's SQL goes under a "-- +migrate Up" marker; an optional
@@ -448,8 +478,13 @@ A migration file's SQL goes under a "-- +migrate Up" marker; an optional
 "migrate down"/"redo"/"to" run to revert it — a migration with no Down
 section can't be reverted.
 
+"migrate diff" catches schema drift from the admin UI's create-table
+form or SQL Studio, which change the live schema without ever touching
+migrations/ — it only reports (exits non-zero if it finds anything), it
+never modifies the database or writes a migration for you.
+
 Flags for "migrate" subcommands:
   -dir string   application migrations directory (default: $MAUBASE_MIGRATIONS_DIR, or migrations)
-  -db string    path to the SQLite database file, "up"/"down"/"redo"/"to"/"status" only (default: $MAUBASE_DB_PATH, or data/maubase.db)
+  -db string    path to the SQLite database file, "up"/"down"/"redo"/"to"/"status"/"diff" only (default: $MAUBASE_DB_PATH, or data/maubase.db)
 `)
 }

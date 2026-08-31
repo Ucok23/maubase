@@ -444,6 +444,133 @@ func applyOneMigration(sqlDB *sql.DB, dir, name string) error {
 	return nil
 }
 
+// DiffResult is one discrepancy Diff found between the live database's
+// schema and what its currently-applied migrations account for.
+type DiffResult struct {
+	Table string
+	// Kind is "unexplained" (exists live, no applied migration explains
+	// it), "missing" (an applied migration should have created it, but
+	// it doesn't exist live), or "altered" (exists in both, but its live
+	// definition no longer matches what its migration(s) produced).
+	Kind string
+	// LiveSQL/ExpectedSQL are the two CREATE TABLE statements being
+	// compared (sqlite_master's own stored text) — empty on whichever
+	// side the table doesn't exist.
+	LiveSQL     string
+	ExpectedSQL string
+}
+
+// Diff compares the live database's application-schema table
+// definitions against a "shadow" database built by replaying only the
+// app migrations Status reports as Applied (not merely present in dir,
+// so a still-pending migration is never mistaken for drift — see
+// spec/migrations-cli.md MIGCLI-38). Scoped to app-schema only, same as
+// every other "migrate" subcommand: maubase's own embedded tables
+// (users, sessions, oauth_*, etc.) are excluded from comparison
+// entirely — Diff doesn't require them to be present, absent, or
+// unaltered, since that's db.Migrate's business, not this command's.
+// Anywhere sqlite_master otherwise disagrees between the two is
+// reported:
+//
+//   - "unexplained": an app table exists live but no applied migration
+//     explains it — created outside any migration file, e.g. via the
+//     admin UI's create-table form or a raw CREATE TABLE in SQL Studio.
+//   - "missing": an applied migration should have created this table,
+//     but it doesn't exist live — e.g. someone DROP TABLE'd it by hand
+//     without touching the migration record.
+//   - "altered": exists in both, but the live CREATE TABLE text no
+//     longer matches what replaying its migration(s) produced — e.g. an
+//     ALTER TABLE run outside any migration file.
+//
+// Diff only ever reads — it never modifies the live database, and (see
+// issue #149) doesn't generate a migration capturing what it finds;
+// that's deliberately out of scope for now, given how much harder it is
+// to do safely for an altered (as opposed to wholly new) table.
+func Diff(sqlDB *sql.DB, dir string) ([]DiffResult, error) {
+	shadow, err := Open(":memory:")
+	if err != nil {
+		return nil, fmt.Errorf("open shadow database: %w", err)
+	}
+	defer shadow.Close()
+
+	if err := Migrate(shadow); err != nil {
+		return nil, fmt.Errorf("build shadow database's embedded schema: %w", err)
+	}
+	// Every table name db.Migrate alone produces — excluded from
+	// comparison below, in both directions, regardless of whether the
+	// live database has even been through a server boot yet (the only
+	// thing that actually applies these there).
+	reserved, err := tableDefinitions(shadow)
+	if err != nil {
+		return nil, fmt.Errorf("read shadow embedded schema: %w", err)
+	}
+
+	statuses, err := Status(sqlDB, dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range statuses {
+		if !s.Applied {
+			continue
+		}
+		if err := applyOneMigration(shadow, dir, s.Name); err != nil {
+			return nil, fmt.Errorf("replay migration %s into shadow database: %w", s.Name, err)
+		}
+	}
+
+	live, err := tableDefinitions(sqlDB)
+	if err != nil {
+		return nil, fmt.Errorf("read live schema: %w", err)
+	}
+	expected, err := tableDefinitions(shadow)
+	if err != nil {
+		return nil, fmt.Errorf("read shadow schema: %w", err)
+	}
+
+	results := []DiffResult{}
+	for name, liveSQL := range live {
+		if _, isReserved := reserved[name]; isReserved {
+			continue
+		}
+		switch expectedSQL, ok := expected[name]; {
+		case !ok:
+			results = append(results, DiffResult{Table: name, Kind: "unexplained", LiveSQL: liveSQL})
+		case liveSQL != expectedSQL:
+			results = append(results, DiffResult{Table: name, Kind: "altered", LiveSQL: liveSQL, ExpectedSQL: expectedSQL})
+		}
+	}
+	for name, expectedSQL := range expected {
+		if _, isReserved := reserved[name]; isReserved {
+			continue
+		}
+		if _, ok := live[name]; !ok {
+			results = append(results, DiffResult{Table: name, Kind: "missing", ExpectedSQL: expectedSQL})
+		}
+	}
+	sort.Slice(results, func(i, j int) bool { return results[i].Table < results[j].Table })
+	return results, nil
+}
+
+// tableDefinitions returns every user table's name -> CREATE TABLE text
+// (sqlite_master's own stored copy), excluding SQLite's own internal
+// bookkeeping tables (sqlite_sequence and the like).
+func tableDefinitions(sqlDB *sql.DB) (map[string]string, error) {
+	rows, err := sqlDB.Query(`SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var name, sqlText string
+		if err := rows.Scan(&name, &sqlText); err != nil {
+			return nil, err
+		}
+		out[name] = sqlText
+	}
+	return out, rows.Err()
+}
+
 const (
 	migrateUpMarker   = "-- +migrate Up"
 	migrateDownMarker = "-- +migrate Down"
