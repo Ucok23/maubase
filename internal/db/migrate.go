@@ -1,8 +1,10 @@
 package db
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"embed"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"os"
@@ -78,6 +80,15 @@ type MigrationStatus struct {
 	// nobody bothered writing a down for — won't have one; that's
 	// expected, not an error.
 	HasDown bool
+	// ChecksumMismatch is true only when Applied and this file's current
+	// on-disk content no longer matches the checksum recorded when it
+	// was applied — i.e. someone edited an already-applied migration
+	// file after the fact. Always false for a pending migration, and
+	// also false for an applied one with no stored checksum (recorded
+	// before checksum verification existed, or added directly to
+	// schema_migrations by hand) — there's nothing to compare against,
+	// which isn't evidence of tampering.
+	ChecksumMismatch bool
 }
 
 // Status reports every .sql file in dir, in the same filename order
@@ -115,21 +126,47 @@ func Status(sqlDB *sql.DB, dir string) ([]MigrationStatus, error) {
 			return nil, fmt.Errorf("read migration %s: %w", name, err)
 		}
 		_, _, hasDown := splitMigrationSQL(string(content))
+		currentChecksum := migrationChecksum(string(content))
 
 		var appliedAt sql.NullTime
+		var storedChecksum sql.NullString
 		err = sqlDB.QueryRow(
-			`SELECT applied_at FROM schema_migrations WHERE version = ?`, "app:"+name,
-		).Scan(&appliedAt)
+			`SELECT applied_at, checksum FROM schema_migrations WHERE version = ?`, "app:"+name,
+		).Scan(&appliedAt, &storedChecksum)
 		switch {
 		case err == sql.ErrNoRows:
 			out = append(out, MigrationStatus{Name: name, HasDown: hasDown})
 		case err != nil:
 			return nil, fmt.Errorf("check migration %s: %w", name, err)
 		default:
-			out = append(out, MigrationStatus{Name: name, Applied: true, AppliedAt: appliedAt.Time, HasDown: hasDown})
+			mismatch := storedChecksum.Valid && storedChecksum.String != "" && storedChecksum.String != currentChecksum
+			out = append(out, MigrationStatus{
+				Name: name, Applied: true, AppliedAt: appliedAt.Time, HasDown: hasDown,
+				ChecksumMismatch: mismatch,
+			})
 		}
 	}
 	return out, nil
+}
+
+// VerifyChecksums reports the filenames of already-applied application
+// migrations whose current on-disk content no longer matches the
+// checksum recorded when they were applied (see MigrationStatus.
+// ChecksumMismatch), in filename order. Always non-nil. This is what
+// `maubase migrate up` checks before applying anything, so it can warn
+// about a modified migration without blocking on it (see cmd/maubase).
+func VerifyChecksums(sqlDB *sql.DB, dir string) ([]string, error) {
+	statuses, err := Status(sqlDB, dir)
+	if err != nil {
+		return nil, err
+	}
+	mismatches := []string{}
+	for _, s := range statuses {
+		if s.ChecksumMismatch {
+			mismatches = append(mismatches, s.Name)
+		}
+	}
+	return mismatches, nil
 }
 
 // MigrateDirDown reverts the n most recently applied application
@@ -267,7 +304,9 @@ func applyOneMigration(sqlDB *sql.DB, dir, name string) error {
 		tx.Rollback()
 		return fmt.Errorf("apply migration %s: %w", name, err)
 	}
-	if _, err := tx.Exec(`INSERT INTO schema_migrations (version) VALUES (?)`, version); err != nil {
+	if _, err := tx.Exec(
+		`INSERT INTO schema_migrations (version, checksum) VALUES (?, ?)`, version, migrationChecksum(string(content)),
+	); err != nil {
 		tx.Rollback()
 		return fmt.Errorf("record migration %s: %w", name, err)
 	}
@@ -317,16 +356,58 @@ func splitMigrationSQL(content string) (up, down string, hasDown bool) {
 }
 
 func ensureMigrationsTable(sqlDB *sql.DB) error {
-	_, err := sqlDB.Exec(`
+	if _, err := sqlDB.Exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version    TEXT PRIMARY KEY,
-			applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+			applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			checksum   TEXT
 		)
-	`)
-	if err != nil {
+	`); err != nil {
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
+	return ensureChecksumColumn(sqlDB)
+}
+
+// ensureChecksumColumn adds schema_migrations.checksum on the fly for a
+// database created before checksum verification existed — the CREATE
+// TABLE above already includes it for a brand new one, but "IF NOT
+// EXISTS" is a no-op against an existing table missing the column. NULL
+// for every row already in such a table, which VerifyChecksums/Status
+// treat as "nothing to compare against," not evidence of tampering.
+func ensureChecksumColumn(sqlDB *sql.DB) error {
+	rows, err := sqlDB.Query(`PRAGMA table_info(schema_migrations)`)
+	if err != nil {
+		return fmt.Errorf("inspect schema_migrations columns: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return fmt.Errorf("scan schema_migrations column info: %w", err)
+		}
+		if name == "checksum" {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("inspect schema_migrations columns: %w", err)
+	}
+	if _, err := sqlDB.Exec(`ALTER TABLE schema_migrations ADD COLUMN checksum TEXT`); err != nil {
+		return fmt.Errorf("add schema_migrations.checksum column: %w", err)
+	}
 	return nil
+}
+
+// migrationChecksum hashes a migration file's exact on-disk content
+// (the whole file, not just its Up section — an edit to the Down half
+// matters too) so a later Status/VerifyChecksums call can tell whether
+// it's been edited since it was applied.
+func migrationChecksum(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
 }
 
 // applyMigrations returns the filenames (not full "version" strings — no
@@ -379,7 +460,7 @@ func applyMigrations(sqlDB *sql.DB, fsys fs.FS, root, versionPrefix string) ([]s
 			return applied, fmt.Errorf("apply migration %s: %w", version, err)
 		}
 		if _, err := tx.Exec(
-			`INSERT INTO schema_migrations (version) VALUES (?)`, version,
+			`INSERT INTO schema_migrations (version, checksum) VALUES (?, ?)`, version, migrationChecksum(string(content)),
 		); err != nil {
 			tx.Rollback()
 			return applied, fmt.Errorf("record migration %s: %w", version, err)

@@ -14,7 +14,7 @@ import (
 	maubasedb "maubase/internal/db"
 )
 
-// Scenarios: spec/migrations-cli.md (MIGCLI-01..23)
+// Scenarios: spec/migrations-cli.md (MIGCLI-01..27)
 //
 // Unlike every other test in this package (which talks HTTP to an
 // in-process testserver), these exercise `maubase migrate ...` as an
@@ -113,6 +113,22 @@ func tableExists(t *testing.T, dbPath, name string) bool {
 		t.Fatalf("query sqlite_master for %s: %v", name, err)
 	}
 	return true
+}
+
+// execSQL runs a write query directly against the SQLite database at
+// dbPath, without going through the server or the migrate CLI at all —
+// used to simulate database state the CLI itself never produces (e.g. a
+// pre-existing schema_migrations row with no checksum).
+func execSQL(t *testing.T, dbPath, query string, args ...any) {
+	t.Helper()
+	sqlDB, err := maubasedb.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open %s: %v", dbPath, err)
+	}
+	defer sqlDB.Close()
+	if _, err := sqlDB.Exec(query, args...); err != nil {
+		t.Fatalf("exec %q: %v", query, err)
+	}
 }
 
 func TestMigrateCLI_UpAppliesPendingMigrationsInOrder(t *testing.T) {
@@ -641,5 +657,104 @@ CREATE TABLE a (id INTEGER PRIMARY KEY);
 	}
 	if !tableExists(t, dbPath, "a") {
 		t.Fatalf("want table a left untouched (still applied) after the failed redo")
+	}
+}
+
+func TestMigrateCLI_UpRecordsAChecksumForEachAppliedMigration(t *testing.T) {
+	// MIGCLI-24
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_a.sql", upDownMigration(`CREATE TABLE a (id INTEGER PRIMARY KEY);`, `DROP TABLE a;`))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("migrate up: want exit 0, got %d: %s", code, stderr)
+	}
+
+	sqlDB, err := maubasedb.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open %s: %v", dbPath, err)
+	}
+	defer sqlDB.Close()
+	var checksum sql.NullString
+	if err := sqlDB.QueryRow(`SELECT checksum FROM schema_migrations WHERE version = 'app:0001_create_a.sql'`).Scan(&checksum); err != nil {
+		t.Fatalf("query checksum: %v", err)
+	}
+	if !checksum.Valid || len(checksum.String) != 64 {
+		t.Fatalf("want a recorded 64-char (sha256 hex) checksum, got %q (valid=%v)", checksum.String, checksum.Valid)
+	}
+}
+
+func TestMigrateCLI_StatusFlagsModifiedMigrationFile(t *testing.T) {
+	// MIGCLI-25
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_a.sql", upDownMigration(`CREATE TABLE a (id INTEGER PRIMARY KEY);`, `DROP TABLE a;`))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+
+	// Edit the file after it's already been applied.
+	writeMigrationFile(t, dir, "0001_create_a.sql", upDownMigration(`CREATE TABLE a (id INTEGER PRIMARY KEY, extra TEXT);`, `DROP TABLE a;`))
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "status")
+	if code != 0 {
+		t.Fatalf("migrate status: want exit 0, got %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "0001_create_a.sql") || !strings.Contains(stdout, "MODIFIED SINCE APPLIED") {
+		t.Fatalf("want the modified migration flagged, got: %s", stdout)
+	}
+}
+
+func TestMigrateCLI_StatusDoesNotFlagMigrationWithNoStoredChecksum(t *testing.T) {
+	// MIGCLI-26
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_a.sql", upDownMigration(`CREATE TABLE a (id INTEGER PRIMARY KEY);`, `DROP TABLE a;`))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+
+	// Simulate a pre-existing row from before checksum verification
+	// existed, then edit the file too — even so, with no checksum to
+	// compare against, this must not be reported as modified.
+	execSQL(t, dbPath, `UPDATE schema_migrations SET checksum = NULL WHERE version = 'app:0001_create_a.sql'`)
+	writeMigrationFile(t, dir, "0001_create_a.sql", upDownMigration(`CREATE TABLE a (id INTEGER PRIMARY KEY, extra TEXT);`, `DROP TABLE a;`))
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "status")
+	if code != 0 {
+		t.Fatalf("migrate status: want exit 0, got %d: %s", code, stderr)
+	}
+	if strings.Contains(stdout, "MODIFIED SINCE APPLIED") {
+		t.Fatalf("want no modified flag when there's no stored checksum to compare against, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "applied") || !strings.Contains(stdout, "0001_create_a.sql") {
+		t.Fatalf("want it still reported as an ordinary applied migration, got: %s", stdout)
+	}
+}
+
+func TestMigrateCLI_UpWarnsButDoesNotBlockOnModifiedMigration(t *testing.T) {
+	// MIGCLI-27
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_a.sql", upDownMigration(`CREATE TABLE a (id INTEGER PRIMARY KEY);`, `DROP TABLE a;`))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+
+	// Modify the already-applied migration, and add an unrelated pending one.
+	writeMigrationFile(t, dir, "0001_create_a.sql", upDownMigration(`CREATE TABLE a (id INTEGER PRIMARY KEY, extra TEXT);`, `DROP TABLE a;`))
+	writeMigrationFile(t, dir, "0002_create_b.sql", upDownMigration(`CREATE TABLE b (id INTEGER PRIMARY KEY);`, `DROP TABLE b;`))
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "up")
+	if code != 0 {
+		t.Fatalf("migrate up: want exit 0 (warn, don't block), got %d: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "0001_create_a.sql") {
+		t.Fatalf("want a warning naming the modified migration on stderr, got: %s", stderr)
+	}
+	if !strings.Contains(stdout, "0002_create_b.sql") {
+		t.Fatalf("want the unrelated pending migration still applied and reported, got: %s", stdout)
+	}
+	if !tableExists(t, dbPath, "b") {
+		t.Fatalf("want table b to exist — up must not have been blocked by the warning")
 	}
 }

@@ -292,6 +292,21 @@ func nextMigrationNumber(dir string) (number, width int, err error) {
 }
 
 func migrateUp(sqlDB *sql.DB, dir string) error {
+	// Checked before applying anything, so a warning about a migration
+	// modified since it ran doesn't get lost among the new "applied"
+	// lines below it. This warns, it doesn't refuse to proceed — up
+	// still needs to be safe to call unconditionally on every server
+	// boot (see db.MigrateDir), which a hard failure here would break.
+	if mismatches, err := db.VerifyChecksums(sqlDB, dir); err != nil {
+		return err
+	} else if len(mismatches) > 0 {
+		fmt.Fprintln(os.Stderr, "warning: these already-applied migrations have been modified since they ran:")
+		for _, name := range mismatches {
+			fmt.Fprintf(os.Stderr, "  %s\n", name)
+		}
+		fmt.Fprintln(os.Stderr, `if that was intentional, "maubase migrate redo" reapplies a migration with its current content`)
+	}
+
 	applied, err := db.MigrateDirApplied(sqlDB, dir)
 	if err != nil {
 		return err
@@ -317,6 +332,8 @@ func migrateStatus(sqlDB *sql.DB, dir string) error {
 	}
 	for _, s := range statuses {
 		switch {
+		case s.Applied && s.ChecksumMismatch:
+			fmt.Printf("applied  %s  (applied %s, MODIFIED SINCE APPLIED — file content no longer matches what was recorded)\n", s.Name, s.AppliedAt.Format(time.RFC3339))
 		case s.Applied && s.HasDown:
 			fmt.Printf("applied  %s  (applied %s)\n", s.Name, s.AppliedAt.Format(time.RFC3339))
 		case s.Applied:
