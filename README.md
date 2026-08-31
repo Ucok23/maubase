@@ -265,6 +265,10 @@ ones a deployer would still need to build or configure themselves.
 
 ## Running it
 
+Starting a brand new project? `maubase init [dir]` scaffolds a starter
+`migrations/` directory, an `.env.example` documenting every env var
+below, and a `.gitignore` entry for `data/` (see spec/project-init.md).
+
 ```sh
 make run
 # or
