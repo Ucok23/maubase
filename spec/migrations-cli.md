@@ -10,9 +10,16 @@ which the server always applies itself on boot regardless of this
 command.
 
 This is part of the fuller migration tooling tracked in issue #144
-(rollback/`down`, `redo`, targeting a specific version, checksum
-verification, and drift capture from the admin UI/SQL Studio) — `new`,
-`up`, and `status` exist so far.
+(`redo`, targeting a specific version, checksum verification, and drift
+capture from the admin UI/SQL Studio) — `new`, `up`, `down`, and `status`
+exist so far.
+
+A migration file's forward SQL goes under a `-- +migrate Up` marker line;
+an optional `-- +migrate Down` marker line after it holds the SQL that
+reverses it (see MIGCLI-13). A file with neither marker (every migration
+written before `down` existed) is entirely "up" SQL with no down
+section — it can still be applied by `up`, it just can't be reverted by
+`down` (MIGCLI-16).
 
 ## MIGCLI-08: `maubase migrate new <name>` scaffolds the next-numbered migration file
 Given an application migrations directory (possibly empty, possibly
@@ -87,14 +94,16 @@ itself.
 
 ## MIGCLI-06: `--db`/`--dir` flags override the configured defaults
 Given a caller passes `--db <path>` and/or `--dir <path>` to
-`maubase migrate up` or `maubase migrate status`,
+`maubase migrate up`, `down`, or `status`,
 when the command runs,
 then it operates against that database file / migrations directory pair
 instead of falling back to `MAUBASE_DB_PATH` / `MAUBASE_MIGRATIONS_DIR`
-(which remain the defaults when a flag is omitted).
+(which remain the defaults when a flag is omitted) — for `down`, this
+holds whether the flags come before or after its optional `n` argument.
 
 ## MIGCLI-07: An unrecognized `migrate` subcommand fails clearly without touching the database
-Given `maubase migrate <x>` where `<x>` isn't `new`, `up`, or `status`,
+Given `maubase migrate <x>` where `<x>` isn't `new`, `up`, `down`, or
+`status`,
 when it runs,
 then it exits non-zero with an error naming the unrecognized subcommand,
 and never opens (or creates) the database file at all.
@@ -106,3 +115,55 @@ starting with `-` that isn't `--dir`/`-dir` (in `--dir=value` or
 when it runs,
 then it fails with an error naming the unrecognized flag, rather than
 silently folding that token into the created file's name.
+
+## MIGCLI-13: Only a migration's Up section runs when it's applied
+Given a migration file with a `-- +migrate Up` section that creates
+something and a `-- +migrate Down` section that would destroy it (e.g.
+`DROP TABLE`),
+when `maubase migrate up` applies it,
+then only the Up section's SQL executes — the Down section's SQL never
+runs during apply, even though it's plain text sitting later in the same
+file.
+
+## MIGCLI-14: `maubase migrate down` reverts the most recently applied migration by default
+Given two or more migrations have been applied, each with a Down
+section,
+when an operator runs `maubase migrate down` with no argument,
+then it reverts only the single most recently applied one — running its
+Down SQL and removing its applied record — leaving every earlier one
+applied, and prints the reverted filename.
+
+## MIGCLI-15: `maubase migrate down <n>` reverts the last n applied migrations, newest first
+Given three migrations have been applied, each with a Down section,
+when an operator runs `maubase migrate down 2`,
+then it reverts the two most recently applied ones, newest first, and
+leaves the oldest one applied.
+
+## MIGCLI-16: A migration with no Down section can't be reverted, and nothing is changed
+Given the migration `down` would next revert has no `-- +migrate Down`
+section (or an empty one),
+when an operator runs `maubase migrate down`,
+then it fails with an error naming that migration, and leaves it applied
+exactly as before — no schema change, no record change.
+
+## MIGCLI-17: A reverted migration is pending again and gets reapplied by `up`
+Given a migration was applied and then reverted via `maubase migrate
+down`,
+when an operator runs `maubase migrate up` afterward,
+then it treats that migration as pending again and reapplies it (its Up
+SQL runs again and it's re-recorded) — reverting removes the applied
+*record*, not the migration file itself.
+
+## MIGCLI-18: `maubase migrate down` with nothing applied is a clean no-op
+Given no application migrations have been applied yet (including when
+the migrations directory doesn't exist at all),
+when an operator runs `maubase migrate down`,
+then it reports nothing to revert and makes no changes, rather than
+erroring.
+
+## MIGCLI-19: An unrecognized flag to `migrate down` fails clearly, the same as `new`
+Given `maubase migrate down --bogus-flag`, or any other unrecognized
+`-`-prefixed token,
+when it runs,
+then it fails with an error naming the unrecognized flag rather than
+misparsing it as the optional `n` argument.

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -70,6 +72,12 @@ type MigrationStatus struct {
 	Applied bool
 	// AppliedAt is the zero time when Applied is false.
 	AppliedAt time.Time
+	// HasDown reports whether this file has a "-- +migrate Down" section
+	// (see splitMigrationSQL) and so can be reverted by MigrateDirDown.
+	// Most migrations written before rollback support existed — or ones
+	// nobody bothered writing a down for — won't have one; that's
+	// expected, not an error.
+	HasDown bool
 }
 
 // Status reports every .sql file in dir, in the same filename order
@@ -102,20 +110,148 @@ func Status(sqlDB *sql.DB, dir string) ([]MigrationStatus, error) {
 
 	out := make([]MigrationStatus, 0, len(names))
 	for _, name := range names {
+		content, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			return nil, fmt.Errorf("read migration %s: %w", name, err)
+		}
+		_, _, hasDown := splitMigrationSQL(string(content))
+
 		var appliedAt sql.NullTime
-		err := sqlDB.QueryRow(
+		err = sqlDB.QueryRow(
 			`SELECT applied_at FROM schema_migrations WHERE version = ?`, "app:"+name,
 		).Scan(&appliedAt)
 		switch {
 		case err == sql.ErrNoRows:
-			out = append(out, MigrationStatus{Name: name})
+			out = append(out, MigrationStatus{Name: name, HasDown: hasDown})
 		case err != nil:
 			return nil, fmt.Errorf("check migration %s: %w", name, err)
 		default:
-			out = append(out, MigrationStatus{Name: name, Applied: true, AppliedAt: appliedAt.Time})
+			out = append(out, MigrationStatus{Name: name, Applied: true, AppliedAt: appliedAt.Time, HasDown: hasDown})
 		}
 	}
 	return out, nil
+}
+
+// MigrateDirDown reverts the n most recently applied application
+// migrations (newest first, by applied_at then by version to break ties
+// deterministically — e.g. every migration in one "up" batch tends to
+// share the same applied_at second), using each file's "-- +migrate
+// Down" section. Returns the filenames it reverted, in the order
+// reverted (always non-nil).
+//
+// If fewer than n migrations are applied, it reverts however many there
+// are. If a migration to be reverted has no "-- +migrate Down" section
+// (see splitMigrationSQL) — or its file has been deleted since it was
+// applied — Down stops there and returns an error naming it: whatever it
+// already reverted earlier in this same call stays reverted, but it
+// won't guess at how to undo a migration it has no down SQL for. A
+// missing directory reverts nothing, matching MigrateDirApplied/Status's
+// own "no directory yet" handling.
+func MigrateDirDown(sqlDB *sql.DB, dir string, n int) ([]string, error) {
+	if n <= 0 {
+		return nil, fmt.Errorf("n must be a positive number of migrations to revert, got %d", n)
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return []string{}, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", dir, err)
+	}
+	if err := ensureMigrationsTable(sqlDB); err != nil {
+		return nil, err
+	}
+
+	rows, err := sqlDB.Query(
+		`SELECT version FROM schema_migrations WHERE version LIKE 'app:%' ORDER BY applied_at DESC, version DESC LIMIT ?`,
+		n,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list applied migrations: %w", err)
+	}
+	var versions []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan applied migration: %w", err)
+		}
+		versions = append(versions, v)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("list applied migrations: %w", err)
+	}
+	rows.Close()
+
+	reverted := []string{}
+	for _, version := range versions {
+		name := strings.TrimPrefix(version, "app:")
+
+		content, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			return reverted, fmt.Errorf("read migration %s to revert it: %w", name, err)
+		}
+		_, down, hasDown := splitMigrationSQL(string(content))
+		if !hasDown || strings.TrimSpace(down) == "" {
+			return reverted, fmt.Errorf(`migration %s has no "-- +migrate Down" section — can't revert it`, name)
+		}
+
+		tx, err := sqlDB.Begin()
+		if err != nil {
+			return reverted, fmt.Errorf("begin tx to revert %s: %w", name, err)
+		}
+		if _, err := tx.Exec(down); err != nil {
+			tx.Rollback()
+			return reverted, fmt.Errorf("revert migration %s: %w", name, err)
+		}
+		if _, err := tx.Exec(`DELETE FROM schema_migrations WHERE version = ?`, version); err != nil {
+			tx.Rollback()
+			return reverted, fmt.Errorf("unrecord migration %s: %w", name, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return reverted, fmt.Errorf("commit revert of %s: %w", name, err)
+		}
+		reverted = append(reverted, name)
+	}
+	return reverted, nil
+}
+
+const (
+	migrateUpMarker   = "-- +migrate Up"
+	migrateDownMarker = "-- +migrate Down"
+)
+
+// splitMigrationSQL splits a migration file's content into its "up" and
+// "down" SQL using "-- +migrate Up" / "-- +migrate Down" marker lines
+// (each alone on its own line, surrounding whitespace ignored). This
+// keeps a migration's forward and reverse SQL in one file — no separate
+// ".down.sql" to keep in sync or forget — while staying entirely
+// backward compatible: a file with neither marker (every migration
+// written before rollback support existed, and the common case for a new
+// one nobody bothered writing a down for) is treated as 100% up SQL with
+// no down section, exactly like before this existed. applyMigrations
+// always executes only the up half; MigrateDirDown requires a down half
+// to exist.
+func splitMigrationSQL(content string) (up, down string, hasDown bool) {
+	lines := strings.Split(content, "\n")
+	upStart, downLine := -1, -1
+	for i, line := range lines {
+		switch strings.TrimSpace(line) {
+		case migrateUpMarker:
+			upStart = i + 1
+		case migrateDownMarker:
+			downLine = i
+		}
+	}
+	if upStart < 0 {
+		// No "-- +migrate Up" marker at all: the whole file is up SQL.
+		return content, "", false
+	}
+	if downLine < 0 || downLine < upStart {
+		// No down marker, or a malformed file where it comes before the
+		// up marker — either way, no down section.
+		return strings.Join(lines[upStart:], "\n"), "", false
+	}
+	return strings.Join(lines[upStart:downLine], "\n"), strings.Join(lines[downLine+1:], "\n"), true
 }
 
 func ensureMigrationsTable(sqlDB *sql.DB) error {
@@ -170,12 +306,13 @@ func applyMigrations(sqlDB *sql.DB, fsys fs.FS, root, versionPrefix string) ([]s
 		if err != nil {
 			return applied, fmt.Errorf("read migration %s: %w", version, err)
 		}
+		up, _, _ := splitMigrationSQL(string(content))
 
 		tx, err := sqlDB.Begin()
 		if err != nil {
 			return applied, fmt.Errorf("begin tx for %s: %w", version, err)
 		}
-		if _, err := tx.Exec(string(content)); err != nil {
+		if _, err := tx.Exec(up); err != nil {
 			tx.Rollback()
 			return applied, fmt.Errorf("apply migration %s: %w", version, err)
 		}

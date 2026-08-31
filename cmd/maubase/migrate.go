@@ -24,19 +24,21 @@ import (
 // hand.
 func runMigrate(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: maubase migrate <new|up|status> [--dir path] [--db path]")
+		return fmt.Errorf("usage: maubase migrate <new|up|down|status> [--dir path] [--db path]")
 	}
 	sub := args[0]
 	rest := args[1:]
 	switch sub {
 	case "new":
 		// Purely a filesystem operation — deliberately never opens (or
-		// creates) the database, unlike up/status below.
+		// creates) the database, unlike up/down/status below.
 		return runMigrateNew(rest)
+	case "down":
+		return runMigrateDown(rest)
 	case "up", "status":
 		return runMigrateUpOrStatus(sub, rest)
 	default:
-		return fmt.Errorf("maubase migrate: unknown subcommand %q (want \"new\", \"up\", or \"status\")", sub)
+		return fmt.Errorf("maubase migrate: unknown subcommand %q (want \"new\", \"up\", \"down\", or \"status\")", sub)
 	}
 }
 
@@ -74,41 +76,20 @@ func runMigrateUpOrStatus(sub string, args []string) error {
 
 func runMigrateNew(args []string) error {
 	// "new"'s syntax is <name> [--dir path] — the name comes first, with
-	// --dir (if any) typically after it. That's the opposite order from
-	// up/status's flags-then-nothing, and Go's flag package only parses
-	// flags up to the first positional argument, so a standard
-	// flag.FlagSet here would silently swallow "--dir" into the name
-	// instead of recognizing it. Parse args by hand instead, picking
-	// --dir out from wherever it appears and joining everything else into
-	// the name — "maubase migrate new create posts table" and
-	// "maubase migrate new create_posts_table" both work, so a caller
-	// doesn't have to remember to quote it.
-	dir := config.Load().MigrationsDir
-	var nameParts []string
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "--dir" || a == "-dir":
-			if i+1 >= len(args) {
-				return fmt.Errorf("flag needs an argument: %s", a)
-			}
-			dir = args[i+1]
-			i++
-		case strings.HasPrefix(a, "--dir="):
-			dir = strings.TrimPrefix(a, "--dir=")
-		case strings.HasPrefix(a, "-dir="):
-			dir = strings.TrimPrefix(a, "-dir=")
-		case strings.HasPrefix(a, "-") && a != "-":
-			// Anything else that looks like a flag is rejected rather
-			// than silently folded into the name — a typo'd flag (e.g.
-			// "--db", which only up/status accept) should fail clearly,
-			// not end up as part of a migration's filename.
-			return fmt.Errorf("flag provided but not defined: %s", a)
-		default:
-			nameParts = append(nameParts, a)
-		}
+	// --dir (if any) typically after it. See extractFlags for why that
+	// needs hand-rolled parsing instead of a plain flag.FlagSet.
+	values, rest, err := extractFlags(args, "dir")
+	if err != nil {
+		return err
 	}
-	name := strings.Join(nameParts, " ")
+	dir := config.Load().MigrationsDir
+	if v, ok := values["dir"]; ok {
+		dir = v
+	}
+	// "maubase migrate new create posts table" and
+	// "maubase migrate new create_posts_table" both work, so a caller
+	// doesn't have to remember to quote the name.
+	name := strings.Join(rest, " ")
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("usage: maubase migrate new <name> [--dir path]")
 	}
@@ -119,6 +100,89 @@ func runMigrateNew(args []string) error {
 	}
 	fmt.Printf("created %s\n", path)
 	return nil
+}
+
+func runMigrateDown(args []string) error {
+	// "down"'s syntax is [n] [--db path] [--dir path] — same
+	// leading-positional-argument shape as "new".
+	values, rest, err := extractFlags(args, "dir", "db")
+	if err != nil {
+		return err
+	}
+	if len(rest) > 1 {
+		return fmt.Errorf("usage: maubase migrate down [n] [--db path] [--dir path]")
+	}
+	n := 1
+	if len(rest) == 1 {
+		parsed, err := strconv.Atoi(rest[0])
+		if err != nil || parsed <= 0 {
+			return fmt.Errorf("n must be a positive integer, got %q", rest[0])
+		}
+		n = parsed
+	}
+
+	cfg := config.Load()
+	dir := cfg.MigrationsDir
+	if v, ok := values["dir"]; ok {
+		dir = v
+	}
+	dbPath := cfg.DBPath
+	if v, ok := values["db"]; ok {
+		dbPath = v
+	}
+
+	sqlDB, err := db.Open(dbPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	return migrateDown(sqlDB, dir, n)
+}
+
+// extractFlags pulls "--name value" / "--name=value" (single- or
+// double-dash) out of args from wherever they appear, for the flag names
+// listed, returning their values and every other token in order. "new"
+// and "down" both need this instead of a plain flag.FlagSet: each takes
+// a leading positional argument (a name / a count) that may be followed
+// by flags, a shape Go's flag package can't express — it only parses
+// flags up to the first positional argument, so "maubase migrate new
+// <name> --dir x" would otherwise silently fold "--dir" and "x" into the
+// name instead of recognizing them. Any other token starting with "-"
+// fails clearly (a typo'd or wrong-subcommand flag) rather than quietly
+// becoming part of the positional argument.
+func extractFlags(args []string, names ...string) (values map[string]string, rest []string, err error) {
+	values = map[string]string{}
+	known := make(map[string]bool, len(names))
+	for _, n := range names {
+		known[n] = true
+	}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		trimmed := strings.TrimPrefix(strings.TrimPrefix(a, "--"), "-")
+		if trimmed == a || a == "-" {
+			// No leading dash at all: an ordinary positional token.
+			rest = append(rest, a)
+			continue
+		}
+		if eq := strings.IndexByte(trimmed, '='); eq >= 0 {
+			name, val := trimmed[:eq], trimmed[eq+1:]
+			if !known[name] {
+				return nil, nil, fmt.Errorf("flag provided but not defined: %s", a)
+			}
+			values[name] = val
+			continue
+		}
+		if !known[trimmed] {
+			return nil, nil, fmt.Errorf("flag provided but not defined: %s", a)
+		}
+		if i+1 >= len(args) {
+			return nil, nil, fmt.Errorf("flag needs an argument: %s", a)
+		}
+		values[trimmed] = args[i+1]
+		i++
+	}
+	return values, rest, nil
 }
 
 var (
@@ -157,9 +221,18 @@ func newMigrationFile(dir, name string) (string, error) {
 	}
 
 	content := fmt.Sprintf(`-- %s
--- Created by "maubase migrate new". Add your schema changes below — this
--- runs once, in a transaction, the next time "maubase migrate up" runs
--- (or the server boots).
+-- Created by "maubase migrate new". Add your schema changes under
+-- "+migrate Up" below — it runs once, in a transaction, the next time
+-- "maubase migrate up" runs (or the server boots). The "+migrate Down"
+-- section is optional but lets "maubase migrate down" undo this
+-- migration later; a migration with no Down section simply can't be
+-- reverted.
+
+-- +migrate Up
+
+
+-- +migrate Down
+
 `, name)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return "", fmt.Errorf("write %s: %w", path, err)
@@ -222,11 +295,29 @@ func migrateStatus(sqlDB *sql.DB, dir string) error {
 		return nil
 	}
 	for _, s := range statuses {
-		if s.Applied {
+		switch {
+		case s.Applied && s.HasDown:
 			fmt.Printf("applied  %s  (applied %s)\n", s.Name, s.AppliedAt.Format(time.RFC3339))
-		} else {
+		case s.Applied:
+			fmt.Printf("applied  %s  (applied %s, no down — can't be reverted)\n", s.Name, s.AppliedAt.Format(time.RFC3339))
+		default:
 			fmt.Printf("pending  %s\n", s.Name)
 		}
+	}
+	return nil
+}
+
+func migrateDown(sqlDB *sql.DB, dir string, n int) error {
+	reverted, err := db.MigrateDirDown(sqlDB, dir, n)
+	if err != nil {
+		return err
+	}
+	if len(reverted) == 0 {
+		fmt.Println("nothing to revert")
+		return nil
+	}
+	for _, name := range reverted {
+		fmt.Printf("reverted %s\n", name)
 	}
 	return nil
 }
@@ -238,11 +329,17 @@ Usage:
   maubase                     Start the server
   maubase migrate new <name>  Scaffold the next-numbered application migration file
   maubase migrate up          Apply pending application migrations
+  maubase migrate down [n]    Revert the last n applied migrations (default 1)
   maubase migrate status      List application migrations and whether each is applied
   maubase help                Show this message
 
+A migration file's SQL goes under a "-- +migrate Up" marker; an optional
+"-- +migrate Down" section (see "maubase migrate new"'s template) is what
+"migrate down" runs to revert it — a migration with no Down section
+can't be reverted.
+
 Flags for "migrate" subcommands:
   -dir string   application migrations directory (default: $MAUBASE_MIGRATIONS_DIR, or migrations)
-  -db string    path to the SQLite database file, "up"/"status" only (default: $MAUBASE_DB_PATH, or data/maubase.db)
+  -db string    path to the SQLite database file, "up"/"down"/"status" only (default: $MAUBASE_DB_PATH, or data/maubase.db)
 `)
 }

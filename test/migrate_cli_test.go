@@ -14,7 +14,7 @@ import (
 	maubasedb "maubase/internal/db"
 )
 
-// Scenarios: spec/migrations-cli.md (MIGCLI-01..12)
+// Scenarios: spec/migrations-cli.md (MIGCLI-01..19)
 //
 // Unlike every other test in this package (which talks HTTP to an
 // in-process testserver), these exercise `maubase migrate ...` as an
@@ -83,6 +83,16 @@ func writeMigrationFile(t *testing.T, dir, name, sqlText string) {
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(sqlText), 0o644); err != nil {
 		t.Fatalf("write migration %s: %v", name, err)
 	}
+}
+
+// upDownMigration builds a migration file's content with a "-- +migrate
+// Up" section and, if down is non-empty, a "-- +migrate Down" section.
+func upDownMigration(up, down string) string {
+	s := "-- +migrate Up\n" + up + "\n"
+	if down != "" {
+		s += "\n-- +migrate Down\n" + down + "\n"
+	}
+	return s
 }
 
 // tableExists reports whether name is a table in the SQLite database at
@@ -357,5 +367,168 @@ func TestMigrateCLI_NewUnrecognizedFlagFailsInsteadOfPollutingTheName(t *testing
 	}
 	if len(entries) != 0 {
 		t.Fatalf("want no file created when a flag is unrecognized, got: %v", entries)
+	}
+}
+
+func TestMigrateCLI_UpOnlyRunsTheUpSection(t *testing.T) {
+	// MIGCLI-13
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_foo.sql", upDownMigration(
+		`CREATE TABLE foo (id INTEGER PRIMARY KEY);`,
+		`DROP TABLE foo;`,
+	))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("migrate up: want exit 0, got %d: %s", code, stderr)
+	}
+	if !tableExists(t, dbPath, "foo") {
+		t.Fatalf("want the Up section's table to exist — the Down section's DROP TABLE must not have run during apply")
+	}
+}
+
+func TestMigrateCLI_DownRevertsMostRecentByDefault(t *testing.T) {
+	// MIGCLI-14
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_a.sql", upDownMigration(
+		`CREATE TABLE a (id INTEGER PRIMARY KEY);`, `DROP TABLE a;`,
+	))
+	writeMigrationFile(t, dir, "0002_create_b.sql", upDownMigration(
+		`CREATE TABLE b (id INTEGER PRIMARY KEY);`, `DROP TABLE b;`,
+	))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "down")
+	if code != 0 {
+		t.Fatalf("migrate down: want exit 0, got %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "0002_create_b.sql") {
+		t.Fatalf("want 0002 reported reverted, got: %s", stdout)
+	}
+	if strings.Contains(stdout, "0001_create_a.sql") {
+		t.Fatalf("want only the most recent migration reverted, got: %s", stdout)
+	}
+	if tableExists(t, dbPath, "b") {
+		t.Fatalf("want table b dropped by the revert")
+	}
+	if !tableExists(t, dbPath, "a") {
+		t.Fatalf("want table a (older migration) left alone")
+	}
+}
+
+func TestMigrateCLI_DownNRevertsNewestFirst(t *testing.T) {
+	// MIGCLI-15
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_a.sql", upDownMigration(`CREATE TABLE a (id INTEGER PRIMARY KEY);`, `DROP TABLE a;`))
+	writeMigrationFile(t, dir, "0002_create_b.sql", upDownMigration(`CREATE TABLE b (id INTEGER PRIMARY KEY);`, `DROP TABLE b;`))
+	writeMigrationFile(t, dir, "0003_create_c.sql", upDownMigration(`CREATE TABLE c (id INTEGER PRIMARY KEY);`, `DROP TABLE c;`))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "down", "2")
+	if code != 0 {
+		t.Fatalf("migrate down 2: want exit 0, got %d: %s", code, stderr)
+	}
+	first := strings.Index(stdout, "0003_create_c.sql")
+	second := strings.Index(stdout, "0002_create_b.sql")
+	if first < 0 || second < 0 || first > second {
+		t.Fatalf("want 0003 reverted before 0002 (newest first), got: %s", stdout)
+	}
+	if tableExists(t, dbPath, "b") || tableExists(t, dbPath, "c") {
+		t.Fatalf("want both b and c dropped")
+	}
+	if !tableExists(t, dbPath, "a") {
+		t.Fatalf("want the oldest migration (a) left applied")
+	}
+}
+
+func TestMigrateCLI_DownWithNoDownSectionLeavesStateUnchanged(t *testing.T) {
+	// MIGCLI-16
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_a.sql", upDownMigration(`CREATE TABLE a (id INTEGER PRIMARY KEY);`, `DROP TABLE a;`))
+	// No down section for this one.
+	writeMigrationFile(t, dir, "0002_create_b.sql", upDownMigration(`CREATE TABLE b (id INTEGER PRIMARY KEY);`, ""))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+
+	_, stderr, code := runMigrateCLI(t, dbPath, dir, "down")
+	if code == 0 {
+		t.Fatalf("want a non-zero exit when the migration to revert has no down section")
+	}
+	if !strings.Contains(stderr, "0002_create_b.sql") {
+		t.Fatalf("want the error to name the un-revertible migration, got: %s", stderr)
+	}
+	if !tableExists(t, dbPath, "b") {
+		t.Fatalf("want table b left untouched (still applied) after the failed revert")
+	}
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "status")
+	if code != 0 {
+		t.Fatalf("migrate status: want exit 0, got %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "0002_create_b.sql") || !strings.Contains(stdout, "applied") {
+		t.Fatalf("want 0002 still reported applied after the failed revert, got: %s", stdout)
+	}
+}
+
+func TestMigrateCLI_RevertedMigrationIsPendingAndReappliedByUp(t *testing.T) {
+	// MIGCLI-17
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_a.sql", upDownMigration(`CREATE TABLE a (id INTEGER PRIMARY KEY);`, `DROP TABLE a;`))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "down"); code != 0 {
+		t.Fatalf("setup: migrate down: want 0, got %d: %s", code, stderr)
+	}
+	if tableExists(t, dbPath, "a") {
+		t.Fatalf("setup: want table a dropped by the revert")
+	}
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "up")
+	if code != 0 {
+		t.Fatalf("migrate up after down: want exit 0, got %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "0001_create_a.sql") {
+		t.Fatalf("want the reverted migration reapplied and reported, got: %s", stdout)
+	}
+	if !tableExists(t, dbPath, "a") {
+		t.Fatalf("want table a recreated by the reapply")
+	}
+}
+
+func TestMigrateCLI_DownWithNothingAppliedIsCleanNoOp(t *testing.T) {
+	// MIGCLI-18
+	dir := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "down")
+	if code != 0 {
+		t.Fatalf("migrate down: want exit 0, got %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "nothing to revert") {
+		t.Fatalf("want a clean-no-op message, got: %s", stdout)
+	}
+}
+
+func TestMigrateCLI_DownUnrecognizedFlagFailsClearly(t *testing.T) {
+	// MIGCLI-19
+	dir := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "down", "--bogus-flag")
+	if code == 0 {
+		t.Fatalf("want a non-zero exit for an unrecognized flag, got 0, stdout: %s", stdout)
+	}
+	if !strings.Contains(stderr, "--bogus-flag") {
+		t.Fatalf("want the error to name the unrecognized flag, got: %s", stderr)
 	}
 }
