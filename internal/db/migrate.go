@@ -9,7 +9,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -280,6 +282,132 @@ func MigrateDirRedo(sqlDB *sql.DB, dir string, n int) ([]string, error) {
 		redone = append(redone, name)
 	}
 	return redone, nil
+}
+
+// MigrateDirTo moves the application schema to exactly the migration
+// named by target — either its exact filename ("0003_add_index.sql") or
+// a bare numeric prefix ("3" or "0003"), see resolveVersion. If target
+// is currently pending, it applies every not-yet-applied migration up
+// to and including it, in filename order (like a scoped Up). If target
+// is currently applied and something after it is also applied, it
+// reverts everything after it, newest first — same error behavior as
+// MigrateDirDown, including refusing on a migration with no "-- +migrate
+// Down" section. If target is already exactly the current state
+// (applied, nothing after it applied), it's a no-op.
+//
+// This assumes the applied set is a normal contiguous prefix of
+// filename order, which is always true through ordinary use of
+// new/up/down/redo — the same assumption MigrateDirDown itself already
+// makes about "the last n applied" being well-defined. Returns the
+// filenames it touched, in the order touched, and which direction it
+// went ("up", "down", or "" for a no-op).
+func MigrateDirTo(sqlDB *sql.DB, dir, target string) (touched []string, direction string, err error) {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil, "", fmt.Errorf("no migrations directory at %s", dir)
+	} else if err != nil {
+		return nil, "", fmt.Errorf("stat %s: %w", dir, err)
+	}
+	if err := ensureMigrationsTable(sqlDB); err != nil {
+		return nil, "", err
+	}
+
+	targetName, err := resolveVersion(dir, target)
+	if err != nil {
+		return nil, "", err
+	}
+
+	statuses, err := Status(sqlDB, dir)
+	if err != nil {
+		return nil, "", err
+	}
+	targetIdx := -1
+	for i, s := range statuses {
+		if s.Name == targetName {
+			targetIdx = i
+			break
+		}
+	}
+	if targetIdx < 0 {
+		return nil, "", fmt.Errorf("migration %s not found", targetName)
+	}
+
+	if statuses[targetIdx].Applied {
+		n := 0
+		for i := targetIdx + 1; i < len(statuses); i++ {
+			if statuses[i].Applied {
+				n++
+			}
+		}
+		if n == 0 {
+			return []string{}, "", nil
+		}
+		reverted, err := MigrateDirDown(sqlDB, dir, n)
+		return reverted, "down", err
+	}
+
+	applied := []string{}
+	for i := 0; i <= targetIdx; i++ {
+		if statuses[i].Applied {
+			continue
+		}
+		if err := applyOneMigration(sqlDB, dir, statuses[i].Name); err != nil {
+			return applied, "up", fmt.Errorf("apply migration %s: %w", statuses[i].Name, err)
+		}
+		applied = append(applied, statuses[i].Name)
+	}
+	return applied, "up", nil
+}
+
+// versionNumberRe matches a migration filename's leading "NNNN_" numeric
+// prefix — kept independent of cmd/maubase's own copy of this pattern
+// (used there for "migrate new"'s next-number scan), since that's a
+// different package.
+var versionNumberRe = regexp.MustCompile(`^(\d+)_`)
+
+// resolveVersion finds the single migration file in dir matching
+// target: first by exact filename, then (if target parses as an
+// integer) by numeric prefix value, so "3", "03", and "0003" all match
+// "0003_add_index.sql". Fails if target matches nothing, or matches more
+// than one file — possible only with inconsistently-padded filenames
+// nobody created via "maubase migrate new" (which always keeps one
+// consistent width).
+func resolveVersion(dir, target string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", fmt.Errorf("read migrations dir: %w", err)
+	}
+
+	for _, e := range entries {
+		if !e.IsDir() && e.Name() == target {
+			return e.Name(), nil
+		}
+	}
+
+	targetN, convErr := strconv.Atoi(target)
+	if convErr != nil {
+		return "", fmt.Errorf("no migration named %q in %s", target, dir)
+	}
+	var matches []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		m := versionNumberRe.FindStringSubmatch(e.Name())
+		if m == nil {
+			continue
+		}
+		if n, err := strconv.Atoi(m[1]); err == nil && n == targetN {
+			matches = append(matches, e.Name())
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("no migration matching %q in %s", target, dir)
+	case 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("%q matches more than one migration file: %v", target, matches)
+	}
 }
 
 // applyOneMigration applies (or reapplies, after MigrateDirDown reverted

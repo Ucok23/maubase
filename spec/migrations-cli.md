@@ -10,9 +10,9 @@ which the server always applies itself on boot regardless of this
 command.
 
 This is part of the fuller migration tooling tracked in issue #144
-(targeting a specific version, and drift capture from the admin UI/SQL
-Studio) — `new`, `up`, `down`, `redo`, `status`, and checksum
-verification exist so far.
+(closed — the remaining item, drift capture from the admin UI/SQL
+Studio, is tracked separately as #149) — `new`, `up`, `down`, `redo`,
+`to`, `status`, and checksum verification all exist.
 
 A migration file's forward SQL goes under a `-- +migrate Up` marker line;
 an optional `-- +migrate Down` marker line after it holds the SQL that
@@ -94,16 +94,17 @@ itself.
 
 ## MIGCLI-06: `--db`/`--dir` flags override the configured defaults
 Given a caller passes `--db <path>` and/or `--dir <path>` to
-`maubase migrate up`, `down`, or `status`,
+`maubase migrate up`, `down`, `redo`, `to`, or `status`,
 when the command runs,
 then it operates against that database file / migrations directory pair
 instead of falling back to `MAUBASE_DB_PATH` / `MAUBASE_MIGRATIONS_DIR`
-(which remain the defaults when a flag is omitted) — for `down`, this
-holds whether the flags come before or after its optional `n` argument.
+(which remain the defaults when a flag is omitted) — for `down`/`redo`,
+this holds whether the flags come before or after the optional `n`
+argument; for `to`, before or after the required `<version>` argument.
 
 ## MIGCLI-07: An unrecognized `migrate` subcommand fails clearly without touching the database
 Given `maubase migrate <x>` where `<x>` isn't `new`, `up`, `down`,
-`redo`, or `status`,
+`redo`, `to`, or `status`,
 when it runs,
 then it exits non-zero with an error naming the unrecognized subcommand,
 and never opens (or creates) the database file at all.
@@ -239,3 +240,45 @@ then both resolve `MAUBASE_DB_PATH`/`MAUBASE_MIGRATIONS_DIR`'s literal
 defaults (`data/maubase.db`, `migrations`) relative to that directory —
 the same "just run it" experience as any ordinary CLI tool, not one
 that requires flags or env vars to work at all.
+
+## MIGCLI-29: `maubase migrate to <version>` applies forward to a target ahead of the current state
+Given three migrations exist and only the first is applied,
+when an operator runs `maubase migrate to <version>` naming the third,
+then it applies the second and third, in filename order, and stops
+there — nothing past the named target is applied even if more
+migrations exist after it.
+
+## MIGCLI-30: `maubase migrate to <version>` reverts back to a target behind the current state
+Given three migrations are all applied, each with a Down section,
+when an operator runs `maubase migrate to <version>` naming the first,
+then it reverts the third and the second, newest first (the same order
+`down` uses), leaving only the first applied.
+
+## MIGCLI-31: `maubase migrate to <version>` targeting the current state is a no-op
+Given the named migration is already exactly the most-recently-applied
+one (it's applied, and nothing after it is),
+when an operator runs `maubase migrate to <version>` naming it,
+then it makes no changes and reports it's already at that version.
+
+## MIGCLI-32: `to` accepts either a migration's exact filename or its bare numeric prefix
+Given `<version>` is passed as either a migration's exact filename
+(`0002_add_index.sql`) or just its numeric prefix (`2` or `0002`),
+when the command runs,
+then both forms resolve to the same migration and produce the same
+result.
+
+## MIGCLI-33: `to` fails clearly, without changing anything, when the version can't be resolved to exactly one migration
+Given `<version>` matches no migration file's name or numeric prefix —
+or, with inconsistently-padded filenames (e.g. both `3_x.sql` and
+`0003_y.sql` existing), matches more than one —
+when the command runs,
+then it fails with an error naming the problem, and neither applies nor
+reverts anything.
+
+## MIGCLI-34: Reverting past a migration with no Down section fails the same way `down` does
+Given moving to an earlier `<version>` would require reverting a
+migration that has no `-- +migrate Down` section,
+when an operator runs `maubase migrate to <version>`,
+then it fails naming that migration (the same failure as MIGCLI-16),
+leaving state exactly as far as it got — nothing beyond the
+un-revertible migration is touched.

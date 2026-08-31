@@ -24,21 +24,23 @@ import (
 // hand.
 func runMigrate(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: maubase migrate <new|up|down|status> [--dir path] [--db path]")
+		return fmt.Errorf("usage: maubase migrate <new|up|down|redo|to|status> [--dir path] [--db path]")
 	}
 	sub := args[0]
 	rest := args[1:]
 	switch sub {
 	case "new":
 		// Purely a filesystem operation — deliberately never opens (or
-		// creates) the database, unlike down/up/redo/status below.
+		// creates) the database, unlike down/up/redo/to/status below.
 		return runMigrateNew(rest)
 	case "down", "redo":
 		return runMigrateDownOrRedo(sub, rest)
+	case "to":
+		return runMigrateTo(rest)
 	case "up", "status":
 		return runMigrateUpOrStatus(sub, rest)
 	default:
-		return fmt.Errorf("maubase migrate: unknown subcommand %q (want \"new\", \"up\", \"down\", \"redo\", or \"status\")", sub)
+		return fmt.Errorf("maubase migrate: unknown subcommand %q (want \"new\", \"up\", \"down\", \"redo\", \"to\", or \"status\")", sub)
 	}
 }
 
@@ -126,6 +128,39 @@ func runMigrateDownOrRedo(sub string, args []string) error {
 		// Unreachable: sub is validated by the caller.
 		return fmt.Errorf("maubase migrate: unknown subcommand %q", sub)
 	}
+}
+
+// runMigrateTo implements "to"'s <version> [--db path] [--dir path]
+// shape — a single required positional argument (unlike "down"/"redo"'s
+// optional one), so it gets its own thin wrapper around extractFlags
+// rather than reusing parseOptionalCount.
+func runMigrateTo(args []string) error {
+	values, rest, err := extractFlags(args, "dir", "db")
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 {
+		return fmt.Errorf("usage: maubase migrate to <version> [--db path] [--dir path]")
+	}
+	target := rest[0]
+
+	cfg := config.Load()
+	dir := cfg.MigrationsDir
+	if v, ok := values["dir"]; ok {
+		dir = v
+	}
+	dbPath := cfg.DBPath
+	if v, ok := values["db"]; ok {
+		dbPath = v
+	}
+
+	sqlDB, err := db.Open(dbPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	return migrateTo(sqlDB, dir, target)
 }
 
 // parseOptionalCount parses "down"/"redo"'s shared [n] [--db path] [--dir
@@ -375,6 +410,25 @@ func migrateRedo(sqlDB *sql.DB, dir string, n int) error {
 	return nil
 }
 
+func migrateTo(sqlDB *sql.DB, dir, target string) error {
+	touched, direction, err := db.MigrateDirTo(sqlDB, dir, target)
+	if err != nil {
+		return err
+	}
+	if len(touched) == 0 {
+		fmt.Println("already at that version")
+		return nil
+	}
+	verb := "applied"
+	if direction == "down" {
+		verb = "reverted"
+	}
+	for _, name := range touched {
+		fmt.Printf("%s %s\n", verb, name)
+	}
+	return nil
+}
+
 func printMigrateUsage() {
 	fmt.Fprint(os.Stderr, `maubase: a self-hostable backend
 
@@ -384,16 +438,17 @@ Usage:
   maubase migrate up          Apply pending application migrations
   maubase migrate down [n]    Revert the last n applied migrations (default 1)
   maubase migrate redo [n]    Revert then reapply the last n applied migrations (default 1)
+  maubase migrate to <ver>    Move to exactly <ver> (a filename or numeric prefix), forward or back
   maubase migrate status      List application migrations and whether each is applied
   maubase help                Show this message
 
 A migration file's SQL goes under a "-- +migrate Up" marker; an optional
 "-- +migrate Down" section (see "maubase migrate new"'s template) is what
-"migrate down"/"redo" run to revert it — a migration with no Down section
-can't be reverted (or redone).
+"migrate down"/"redo"/"to" run to revert it — a migration with no Down
+section can't be reverted.
 
 Flags for "migrate" subcommands:
   -dir string   application migrations directory (default: $MAUBASE_MIGRATIONS_DIR, or migrations)
-  -db string    path to the SQLite database file, "up"/"down"/"redo"/"status" only (default: $MAUBASE_DB_PATH, or data/maubase.db)
+  -db string    path to the SQLite database file, "up"/"down"/"redo"/"to"/"status" only (default: $MAUBASE_DB_PATH, or data/maubase.db)
 `)
 }
