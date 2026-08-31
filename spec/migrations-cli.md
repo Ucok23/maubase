@@ -9,10 +9,9 @@ It never touches maubase's own embedded internal schema
 which the server always applies itself on boot regardless of this
 command.
 
-This is part of the fuller migration tooling tracked in issue #144
-(closed — the remaining item, drift capture from the admin UI/SQL
-Studio, is tracked separately as #149) — `new`, `up`, `down`, `redo`,
-`to`, `status`, and checksum verification all exist.
+This is the fuller migration tooling tracked in issue #144 (closed) and
+#149 (also closed) — `new`, `up`, `down`, `redo`, `to`, `status`,
+`diff`, and checksum verification all exist.
 
 A migration file's forward SQL goes under a `-- +migrate Up` marker line;
 an optional `-- +migrate Down` marker line after it holds the SQL that
@@ -94,7 +93,7 @@ itself.
 
 ## MIGCLI-06: `--db`/`--dir` flags override the configured defaults
 Given a caller passes `--db <path>` and/or `--dir <path>` to
-`maubase migrate up`, `down`, `redo`, `to`, or `status`,
+`maubase migrate up`, `down`, `redo`, `to`, `status`, or `diff`,
 when the command runs,
 then it operates against that database file / migrations directory pair
 instead of falling back to `MAUBASE_DB_PATH` / `MAUBASE_MIGRATIONS_DIR`
@@ -104,7 +103,7 @@ argument; for `to`, before or after the required `<version>` argument.
 
 ## MIGCLI-07: An unrecognized `migrate` subcommand fails clearly without touching the database
 Given `maubase migrate <x>` where `<x>` isn't `new`, `up`, `down`,
-`redo`, `to`, or `status`,
+`redo`, `to`, `status`, or `diff`,
 when it runs,
 then it exits non-zero with an error naming the unrecognized subcommand,
 and never opens (or creates) the database file at all.
@@ -282,3 +281,54 @@ when an operator runs `maubase migrate to <version>`,
 then it fails naming that migration (the same failure as MIGCLI-16),
 leaving state exactly as far as it got — nothing beyond the
 un-revertible migration is touched.
+
+## MIGCLI-35: `maubase migrate diff` reports a table created outside any migration
+Given a table was created directly against the database (e.g. via the
+admin UI's create-table form, or a raw `CREATE TABLE` in SQL Studio),
+with no migration file accounting for it,
+when an operator runs `maubase migrate diff`,
+then it reports that table as unexplained and exits non-zero.
+
+## MIGCLI-36: `maubase migrate diff` reports a table altered outside any migration
+Given a migration created a table and it was applied, and a column was
+then added to that table directly (not via a migration),
+when an operator runs `maubase migrate diff`,
+then it reports that table as altered and exits non-zero — its live
+definition no longer matches what replaying its migration(s) produces.
+
+## MIGCLI-37: `maubase migrate diff` is clean when the database matches its applied migrations exactly
+Given every app-schema table in the database is exactly accounted for
+by the currently-applied migrations,
+when an operator runs `maubase migrate diff`,
+then it reports no drift and exits zero.
+
+## MIGCLI-38: `maubase migrate diff` never mistakes a pending migration for drift
+Given a migration exists on disk but hasn't been applied yet (still
+pending),
+when an operator runs `maubase migrate diff`,
+then the table that migration would create is reported neither as
+unexplained nor as missing — `diff` only ever compares against
+currently-applied migrations, the same distinction `migrate status`
+already draws between pending and applied.
+
+## MIGCLI-39: `maubase migrate diff` reports a table recorded as applied but missing from the database
+Given a migration is marked applied, but the table it created has since
+been dropped directly (not via `migrate down`),
+when an operator runs `maubase migrate diff`,
+then it reports that table as missing and exits non-zero.
+
+## MIGCLI-40: `maubase migrate diff` is scoped to app-schema tables only
+Given maubase's own embedded internal tables (`users`, `sessions`,
+`oauth_*`, etc.), which `diff` never touches or manages,
+when an operator runs `maubase migrate diff` — including against a
+database that has never been through a server boot at all, so none of
+those embedded tables exist yet —
+then none of them are ever reported as unexplained, missing, or
+altered; `diff`'s comparison excludes them entirely, the same
+app-schema-only scope as every other `migrate` subcommand.
+
+## MIGCLI-41: `maubase migrate diff` never modifies the database
+Given any of the drift conditions above,
+when `maubase migrate diff` runs,
+then the live database is left completely unchanged — it only ever
+reads, and doesn't generate or apply a migration for what it finds.

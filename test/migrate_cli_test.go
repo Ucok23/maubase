@@ -14,7 +14,7 @@ import (
 	maubasedb "maubase/internal/db"
 )
 
-// Scenarios: spec/migrations-cli.md (MIGCLI-01..34)
+// Scenarios: spec/migrations-cli.md (MIGCLI-01..41)
 //
 // Unlike every other test in this package (which talks HTTP to an
 // in-process testserver), these exercise `maubase migrate ...` as an
@@ -1002,5 +1002,180 @@ func TestMigrateCLI_ToFailsOnNoDownSectionLeavingStateAsFarAsItGot(t *testing.T)
 	}
 	if !tableExists(t, dbPath, "b") || !tableExists(t, dbPath, "a") {
 		t.Fatalf("want tables a and b left untouched (still applied) after the failure")
+	}
+}
+
+// schemaSnapshot returns a stable string summarizing every table's
+// definition in dbPath — used to confirm migrate diff never modifies
+// the database it inspects.
+func schemaSnapshot(t *testing.T, dbPath string) string {
+	t.Helper()
+	sqlDB, err := maubasedb.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open %s: %v", dbPath, err)
+	}
+	defer sqlDB.Close()
+	rows, err := sqlDB.Query(`SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name`)
+	if err != nil {
+		t.Fatalf("query sqlite_master: %v", err)
+	}
+	defer rows.Close()
+	var b strings.Builder
+	for rows.Next() {
+		var name, sqlText string
+		if err := rows.Scan(&name, &sqlText); err != nil {
+			t.Fatalf("scan sqlite_master row: %v", err)
+		}
+		fmt.Fprintf(&b, "%s: %s\n", name, sqlText)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate sqlite_master: %v", err)
+	}
+	return b.String()
+}
+
+func TestMigrateCLI_DiffReportsUnexplainedTable(t *testing.T) {
+	// MIGCLI-35
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_posts.sql", upDownMigration(`CREATE TABLE posts (id INTEGER PRIMARY KEY);`, `DROP TABLE posts;`))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+	execSQL(t, dbPath, `CREATE TABLE widgets (id INTEGER PRIMARY KEY, name TEXT)`)
+
+	stdout, _, code := runMigrateCLI(t, dbPath, dir, "diff")
+	if code == 0 {
+		t.Fatalf("want a non-zero exit when drift is found, stdout: %s", stdout)
+	}
+	if !strings.Contains(stdout, "unexplained") || !strings.Contains(stdout, "widgets") {
+		t.Fatalf("want widgets reported unexplained, got: %s", stdout)
+	}
+}
+
+func TestMigrateCLI_DiffReportsAlteredTable(t *testing.T) {
+	// MIGCLI-36
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_posts.sql", upDownMigration(`CREATE TABLE posts (id INTEGER PRIMARY KEY);`, `DROP TABLE posts;`))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+	execSQL(t, dbPath, `ALTER TABLE posts ADD COLUMN body TEXT`)
+
+	stdout, _, code := runMigrateCLI(t, dbPath, dir, "diff")
+	if code == 0 {
+		t.Fatalf("want a non-zero exit when drift is found, stdout: %s", stdout)
+	}
+	if !strings.Contains(stdout, "altered") || !strings.Contains(stdout, "posts") {
+		t.Fatalf("want posts reported altered, got: %s", stdout)
+	}
+}
+
+func TestMigrateCLI_DiffIsCleanWhenMatchingExactly(t *testing.T) {
+	// MIGCLI-37
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_posts.sql", upDownMigration(`CREATE TABLE posts (id INTEGER PRIMARY KEY);`, `DROP TABLE posts;`))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "diff")
+	if code != 0 {
+		t.Fatalf("migrate diff: want exit 0, got %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "no drift") {
+		t.Fatalf("want a clean report, got: %s", stdout)
+	}
+}
+
+func TestMigrateCLI_DiffIgnoresAPendingMigration(t *testing.T) {
+	// MIGCLI-38
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_posts.sql", upDownMigration(`CREATE TABLE posts (id INTEGER PRIMARY KEY);`, `DROP TABLE posts;`))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+	// Added after up ran — stays pending.
+	writeMigrationFile(t, dir, "0002_create_comments.sql", upDownMigration(`CREATE TABLE comments (id INTEGER PRIMARY KEY);`, `DROP TABLE comments;`))
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "diff")
+	if code != 0 {
+		t.Fatalf("migrate diff: want exit 0 (pending migration isn't drift), got %d: %s", code, stdout+stderr)
+	}
+	if strings.Contains(stdout, "comments") {
+		t.Fatalf("want no mention of the pending migration's table, got: %s", stdout)
+	}
+}
+
+func TestMigrateCLI_DiffReportsMissingTable(t *testing.T) {
+	// MIGCLI-39
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_posts.sql", upDownMigration(`CREATE TABLE posts (id INTEGER PRIMARY KEY);`, `DROP TABLE posts;`))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+	execSQL(t, dbPath, `DROP TABLE posts`)
+
+	stdout, _, code := runMigrateCLI(t, dbPath, dir, "diff")
+	if code == 0 {
+		t.Fatalf("want a non-zero exit when drift is found, stdout: %s", stdout)
+	}
+	if !strings.Contains(stdout, "missing") || !strings.Contains(stdout, "posts") {
+		t.Fatalf("want posts reported missing, got: %s", stdout)
+	}
+}
+
+func TestMigrateCLI_DiffExcludesEmbeddedTables(t *testing.T) {
+	// MIGCLI-40
+	dir := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	// Never touched by db.Migrate at all — this db has been opened only
+	// via the migrate CLI, which never applies the embedded schema,
+	// simulating a database that's never been through a server boot.
+
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "diff")
+	if code != 0 {
+		t.Fatalf("migrate diff: want exit 0 (no app migrations to compare), got %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "no drift") {
+		t.Fatalf("want a clean report even with zero embedded tables present, got: %s", stdout)
+	}
+	for _, embeddedTable := range []string{"users", "sessions", "oauth_clients", "owner_users"} {
+		if strings.Contains(stdout, embeddedTable) {
+			t.Fatalf("want no mention of embedded table %q, got: %s", embeddedTable, stdout)
+		}
+	}
+}
+
+func TestMigrateCLI_DiffNeverModifiesTheDatabase(t *testing.T) {
+	// MIGCLI-41
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_posts.sql", upDownMigration(`CREATE TABLE posts (id INTEGER PRIMARY KEY);`, `DROP TABLE posts;`))
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, stderr, code := runMigrateCLI(t, dbPath, dir, "up"); code != 0 {
+		t.Fatalf("setup: migrate up: want 0, got %d: %s", code, stderr)
+	}
+	execSQL(t, dbPath, `CREATE TABLE widgets (id INTEGER PRIMARY KEY)`)
+	execSQL(t, dbPath, `ALTER TABLE posts ADD COLUMN body TEXT`)
+
+	before := schemaSnapshot(t, dbPath)
+	stdout, stderr, code := runMigrateCLI(t, dbPath, dir, "diff")
+	if code == 0 {
+		t.Fatalf("setup sanity check: want drift found (non-zero exit), stderr: %s", stderr)
+	}
+	// Specifically drift being reported, not e.g. an unrelated failure
+	// (unknown subcommand, can't open db) that would also happen to
+	// satisfy a bare "exit code is non-zero" check.
+	if !strings.Contains(stdout, "unexplained") && !strings.Contains(stdout, "altered") {
+		t.Fatalf("setup sanity check: want the drift actually reported, got stdout: %s stderr: %s", stdout, stderr)
+	}
+	after := schemaSnapshot(t, dbPath)
+
+	if before != after {
+		t.Fatalf("want migrate diff to never modify the database.\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 }
