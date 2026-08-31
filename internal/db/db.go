@@ -11,6 +11,8 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	_ "modernc.org/sqlite"
 )
@@ -19,7 +21,20 @@ import (
 // pragmas suited to a small, single-node deployment: WAL journaling for
 // concurrent readers, foreign keys enforced, and a busy timeout so
 // short-lived write contention retries instead of erroring out.
+//
+// path's parent directory is created if it doesn't exist yet (e.g. the
+// default MAUBASE_DB_PATH's "data/" on a brand new project) — SQLite
+// itself creates the database file on first use, but never the
+// directory it lives in, so without this a fresh checkout's very first
+// boot (or `maubase migrate up`) fails with "unable to open database
+// file" before it ever gets the chance to create anything.
 func Open(path string) (*sql.DB, error) {
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("create %s: %w", dir, err)
+		}
+	}
+
 	dsn := fmt.Sprintf(
 		"file:%s?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)",
 		path,

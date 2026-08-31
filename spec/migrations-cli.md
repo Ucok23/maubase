@@ -229,3 +229,13 @@ then it prints a warning naming the modified migration, but still
 applies the pending migration normally — a modified migration warns,
 it never fails the whole command (this must stay safe to run
 unconditionally on every server boot, same as today).
+
+## MIGCLI-28: With no flags and no env overrides, `migrate` resolves its defaults against the current directory, like any ordinary command-line tool
+Given an operator has `cd`'d into their project directory (no
+`--db`/`--dir` flags, no `MAUBASE_DB_PATH`/`MAUBASE_MIGRATIONS_DIR` set)
+and created a `migrations/` folder there themselves,
+when they run `maubase migrate new <name>`, then `maubase migrate up`,
+then both resolve `MAUBASE_DB_PATH`/`MAUBASE_MIGRATIONS_DIR`'s literal
+defaults (`data/maubase.db`, `migrations`) relative to that directory —
+the same "just run it" experience as any ordinary CLI tool, not one
+that requires flags or env vars to work at all.

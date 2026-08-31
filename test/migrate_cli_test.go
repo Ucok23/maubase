@@ -14,7 +14,7 @@ import (
 	maubasedb "maubase/internal/db"
 )
 
-// Scenarios: spec/migrations-cli.md (MIGCLI-01..27)
+// Scenarios: spec/migrations-cli.md (MIGCLI-01..28)
 //
 // Unlike every other test in this package (which talks HTTP to an
 // in-process testserver), these exercise `maubase migrate ...` as an
@@ -76,6 +76,40 @@ func runMigrateCLI(t *testing.T, dbPath, dir string, args ...string) (stdout, st
 	fullArgs := append([]string{"migrate"}, args...)
 	fullArgs = append(fullArgs, "--db", dbPath, "--dir", dir)
 	return runCLI(t, fullArgs...)
+}
+
+// runCLIInDir runs the built maubase binary with args verbatim, with its
+// working directory set to wd — simulating the ordinary "cd into your
+// project and just run maubase" invocation, with no --db/--dir flags and
+// no MAUBASE_DB_PATH/MAUBASE_MIGRATIONS_DIR overrides, so
+// config.Load()'s literal defaults ("data/maubase.db", "migrations")
+// resolve relative to wd exactly like they would for a real user.
+func runCLIInDir(t *testing.T, wd string, args ...string) (stdout, stderr string, exitCode int) {
+	t.Helper()
+	bin := buildMaubaseCLI(t)
+	cmd := exec.Command(bin, args...)
+	cmd.Dir = wd
+	// Strip any MAUBASE_* the test process's own environment happens to
+	// carry, so this genuinely exercises config.Load()'s hard-coded
+	// defaults rather than whatever ambient config this test suite runs
+	// under.
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "MAUBASE_") {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	err := cmd.Run()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			exitCode = ee.ExitCode()
+		} else {
+			t.Fatalf("run maubase %v (in %s): %v", args, wd, err)
+		}
+	}
+	return outBuf.String(), errBuf.String(), exitCode
 }
 
 func writeMigrationFile(t *testing.T, dir, name, sqlText string) {
@@ -756,5 +790,59 @@ func TestMigrateCLI_UpWarnsButDoesNotBlockOnModifiedMigration(t *testing.T) {
 	}
 	if !tableExists(t, dbPath, "b") {
 		t.Fatalf("want table b to exist — up must not have been blocked by the warning")
+	}
+}
+
+func TestMigrateCLI_RelativeDefaultsResolveAgainstCWD(t *testing.T) {
+	// MIGCLI-28
+	projectDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(projectDir, "migrations"), 0o755); err != nil {
+		t.Fatalf("setup: mkdir migrations: %v", err)
+	}
+	writeMigrationFile(t, filepath.Join(projectDir, "migrations"), "0001_create_widgets.sql", `CREATE TABLE widgets (id INTEGER PRIMARY KEY);`)
+
+	// No --db/--dir, no MAUBASE_DB_PATH/MAUBASE_MIGRATIONS_DIR — just
+	// "cd into the project and run it," like the README's own quickstart.
+	stdout, stderr, code := runCLIInDir(t, projectDir, "migrate", "up")
+	if code != 0 {
+		t.Fatalf("migrate up (cwd-relative defaults): want exit 0, got %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "0001_create_widgets.sql") {
+		t.Fatalf("want the migration applied, got: %s", stdout)
+	}
+
+	wantDBPath := filepath.Join(projectDir, "data", "maubase.db")
+	if _, err := os.Stat(wantDBPath); err != nil {
+		t.Fatalf("want the default db path (data/maubase.db) resolved relative to the project dir: %v", err)
+	}
+	if !tableExists(t, wantDBPath, "widgets") {
+		t.Fatalf("want widgets table to exist at %s", wantDBPath)
+	}
+
+	status, stderr, code := runCLIInDir(t, projectDir, "migrate", "status")
+	if code != 0 {
+		t.Fatalf("migrate status (cwd-relative defaults): want exit 0, got %d: %s", code, stderr)
+	}
+	if !strings.Contains(status, "applied") || !strings.Contains(status, "0001_create_widgets.sql") {
+		t.Fatalf("want 0001 reported applied, got: %s", status)
+	}
+}
+
+func TestMigrateCLI_NewWithNoFlagsCreatesMigrationsRelativeToCWD(t *testing.T) {
+	// MIGCLI-28
+	projectDir := t.TempDir() // a brand new project — no migrations/ yet at all.
+
+	stdout, stderr, code := runCLIInDir(t, projectDir, "migrate", "new", "create_posts")
+	if code != 0 {
+		t.Fatalf("migrate new (cwd-relative defaults): want exit 0, got %d: %s", code, stderr)
+	}
+	// Reported relative to cwd ("migrations/0001_create_posts.sql"), same
+	// as any ordinary CLI tool — not re-anchored to an absolute path.
+	if !strings.Contains(stdout, filepath.Join("migrations", "0001_create_posts.sql")) {
+		t.Fatalf("want the created path reported, got: %s", stdout)
+	}
+	wantPath := filepath.Join(projectDir, "migrations", "0001_create_posts.sql")
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Fatalf("want %s to exist (migrations/ created relative to the project dir): %v", wantPath, err)
 	}
 }
