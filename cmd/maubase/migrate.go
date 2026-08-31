@@ -5,6 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"maubase/internal/config"
@@ -20,13 +24,25 @@ import (
 // hand.
 func runMigrate(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: maubase migrate <up|status> [--db path] [--dir path]")
+		return fmt.Errorf("usage: maubase migrate <new|up|status> [--dir path] [--db path]")
 	}
 	sub := args[0]
-	if sub != "up" && sub != "status" {
-		return fmt.Errorf("maubase migrate: unknown subcommand %q (want \"up\" or \"status\")", sub)
+	rest := args[1:]
+	switch sub {
+	case "new":
+		// Purely a filesystem operation — deliberately never opens (or
+		// creates) the database, unlike up/status below.
+		return runMigrateNew(rest)
+	case "up", "status":
+		return runMigrateUpOrStatus(sub, rest)
+	default:
+		return fmt.Errorf("maubase migrate: unknown subcommand %q (want \"new\", \"up\", or \"status\")", sub)
 	}
+}
 
+// runMigrateUpOrStatus is the shared setup ("up" and "status" both take
+// the same flags and open the same database) behind migrateUp/migrateStatus.
+func runMigrateUpOrStatus(sub string, args []string) error {
 	// Defaults come from the same env vars the server itself reads
 	// (MAUBASE_DB_PATH, MAUBASE_MIGRATIONS_DIR), so pointing this at a
 	// running deployment's database needs no flags at all — only a local
@@ -35,7 +51,7 @@ func runMigrate(args []string) error {
 	fs := flag.NewFlagSet("maubase migrate "+sub, flag.ContinueOnError)
 	dbPath := fs.String("db", cfg.DBPath, "path to the SQLite database file")
 	dir := fs.String("dir", cfg.MigrationsDir, "directory of application migration .sql files")
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
@@ -51,9 +67,134 @@ func runMigrate(args []string) error {
 	case "status":
 		return migrateStatus(sqlDB, *dir)
 	default:
-		// Unreachable: sub is validated above.
+		// Unreachable: sub is validated by the caller.
 		return fmt.Errorf("maubase migrate: unknown subcommand %q", sub)
 	}
+}
+
+func runMigrateNew(args []string) error {
+	// "new"'s syntax is <name> [--dir path] — the name comes first, with
+	// --dir (if any) typically after it. That's the opposite order from
+	// up/status's flags-then-nothing, and Go's flag package only parses
+	// flags up to the first positional argument, so a standard
+	// flag.FlagSet here would silently swallow "--dir" into the name
+	// instead of recognizing it. Parse args by hand instead, picking
+	// --dir out from wherever it appears and joining everything else into
+	// the name — "maubase migrate new create posts table" and
+	// "maubase migrate new create_posts_table" both work, so a caller
+	// doesn't have to remember to quote it.
+	dir := config.Load().MigrationsDir
+	var nameParts []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--dir" || a == "-dir":
+			if i+1 >= len(args) {
+				return fmt.Errorf("flag needs an argument: %s", a)
+			}
+			dir = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--dir="):
+			dir = strings.TrimPrefix(a, "--dir=")
+		case strings.HasPrefix(a, "-dir="):
+			dir = strings.TrimPrefix(a, "-dir=")
+		case strings.HasPrefix(a, "-") && a != "-":
+			// Anything else that looks like a flag is rejected rather
+			// than silently folded into the name — a typo'd flag (e.g.
+			// "--db", which only up/status accept) should fail clearly,
+			// not end up as part of a migration's filename.
+			return fmt.Errorf("flag provided but not defined: %s", a)
+		default:
+			nameParts = append(nameParts, a)
+		}
+	}
+	name := strings.Join(nameParts, " ")
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("usage: maubase migrate new <name> [--dir path]")
+	}
+
+	path, err := newMigrationFile(dir, name)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("created %s\n", path)
+	return nil
+}
+
+var (
+	migrationNumberRe = regexp.MustCompile(`^(\d+)_`)
+	migrationSlugRe   = regexp.MustCompile(`[^a-z0-9]+`)
+)
+
+// newMigrationFile creates the next-numbered .sql file in dir for the
+// given human-readable name, creating dir itself if it doesn't exist yet
+// (unlike MigrateDirApplied/Status, for which a missing directory is a
+// silent no-op — here the operator's clear intent is to start one). The
+// next number is one past the highest existing numeric prefix in dir, not
+// the count of files in it, so a deleted or renamed migration doesn't
+// cause a collision; the zero-padding width matches whatever that
+// highest-numbered file already used (defaulting to 4 digits, matching
+// maubase's own embedded migrations, when dir is empty or new).
+func newMigrationFile(dir, name string) (string, error) {
+	slug := migrationSlugRe.ReplaceAllString(strings.ToLower(strings.TrimSpace(name)), "_")
+	slug = strings.Trim(slug, "_")
+	if slug == "" {
+		return "", fmt.Errorf("migration name must contain at least one letter or digit, got %q", name)
+	}
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create migrations dir %s: %w", dir, err)
+	}
+	number, width, err := nextMigrationNumber(dir)
+	if err != nil {
+		return "", fmt.Errorf("determine next migration number in %s: %w", dir, err)
+	}
+
+	filename := fmt.Sprintf("%0*d_%s.sql", width, number, slug)
+	path := filepath.Join(dir, filename)
+	if _, err := os.Stat(path); err == nil {
+		return "", fmt.Errorf("%s already exists", path)
+	}
+
+	content := fmt.Sprintf(`-- %s
+-- Created by "maubase migrate new". Add your schema changes below — this
+-- runs once, in a transaction, the next time "maubase migrate up" runs
+-- (or the server boots).
+`, name)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return "", fmt.Errorf("write %s: %w", path, err)
+	}
+	return path, nil
+}
+
+// nextMigrationNumber scans dir for files matching the "NNNN_..." naming
+// convention and returns one past the highest number found, along with
+// that file's zero-padding width. An empty or not-yet-existing dir (or
+// one with no numbered files in it yet) starts at 1, width 4.
+func nextMigrationNumber(dir string) (number, width int, err error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, 0, err
+	}
+	width = 4
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		m := migrationNumberRe.FindStringSubmatch(e.Name())
+		if m == nil {
+			continue
+		}
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			continue
+		}
+		if n >= number {
+			number = n
+			width = len(m[1])
+		}
+	}
+	return number + 1, width, nil
 }
 
 func migrateUp(sqlDB *sql.DB, dir string) error {
@@ -94,13 +235,14 @@ func printMigrateUsage() {
 	fmt.Fprint(os.Stderr, `maubase: a self-hostable backend
 
 Usage:
-  maubase                   Start the server
-  maubase migrate up        Apply pending application migrations
-  maubase migrate status    List application migrations and whether each is applied
-  maubase help              Show this message
+  maubase                     Start the server
+  maubase migrate new <name>  Scaffold the next-numbered application migration file
+  maubase migrate up          Apply pending application migrations
+  maubase migrate status      List application migrations and whether each is applied
+  maubase help                Show this message
 
 Flags for "migrate" subcommands:
-  -db string    path to the SQLite database file (default: $MAUBASE_DB_PATH, or data/maubase.db)
   -dir string   application migrations directory (default: $MAUBASE_MIGRATIONS_DIR, or migrations)
+  -db string    path to the SQLite database file, "up"/"status" only (default: $MAUBASE_DB_PATH, or data/maubase.db)
 `)
 }

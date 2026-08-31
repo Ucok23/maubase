@@ -9,10 +9,41 @@ It never touches maubase's own embedded internal schema
 which the server always applies itself on boot regardless of this
 command.
 
-This is the first slice of the fuller migration tooling tracked in
-issue #144 (scaffolding new migration files, rollback/`down`, `redo`,
-targeting a specific version, checksum verification, and drift capture
-from the admin UI/SQL Studio) — only `up` and `status` exist so far.
+This is part of the fuller migration tooling tracked in issue #144
+(rollback/`down`, `redo`, targeting a specific version, checksum
+verification, and drift capture from the admin UI/SQL Studio) — `new`,
+`up`, and `status` exist so far.
+
+## MIGCLI-08: `maubase migrate new <name>` scaffolds the next-numbered migration file
+Given an application migrations directory (possibly empty, possibly
+containing files up to some highest numeric prefix),
+when an operator runs `maubase migrate new <name>`,
+then it creates one `.sql` file in that directory numbered one past the
+highest existing prefix (`0001` when the directory is empty or new),
+with `<name>` lowercased and slugified into the filename, and it prints
+the created file's path. It never opens or creates the database.
+
+## MIGCLI-09: `maubase migrate new` creates the migrations directory if missing
+Given `--dir` (or `MAUBASE_MIGRATIONS_DIR`) points at a directory that
+doesn't exist yet,
+when an operator runs `maubase migrate new <name>`,
+then it creates that directory along with the first migration file in
+it (`0001_...`) — unlike `up`/`status`, for which a missing directory is
+a no-op, `new`'s whole point is to start one.
+
+## MIGCLI-10: The next migration number follows the highest existing one, not the file count
+Given a migrations directory where a lower-numbered file has been
+deleted (e.g. only `0002_...` and `0003_...` remain, `0001_...` is
+gone),
+when an operator runs `maubase migrate new <name>`,
+then the new file is numbered `0004` — one past the highest number
+present — not `0003` (which a naive file-count-based scheme would
+collide on).
+
+## MIGCLI-11: `maubase migrate new` requires a name
+Given no name argument (only flags, or nothing at all),
+when an operator runs `maubase migrate new`,
+then it fails with a usage error and creates no file and no directory.
 
 ## MIGCLI-01: `maubase migrate up` applies pending migrations in order
 Given an application migrations directory containing one or more `.sql`
@@ -63,7 +94,15 @@ instead of falling back to `MAUBASE_DB_PATH` / `MAUBASE_MIGRATIONS_DIR`
 (which remain the defaults when a flag is omitted).
 
 ## MIGCLI-07: An unrecognized `migrate` subcommand fails clearly without touching the database
-Given `maubase migrate <x>` where `<x>` isn't `up` or `status`,
+Given `maubase migrate <x>` where `<x>` isn't `new`, `up`, or `status`,
 when it runs,
 then it exits non-zero with an error naming the unrecognized subcommand,
 and never opens (or creates) the database file at all.
+
+## MIGCLI-12: An unrecognized flag to `migrate new` fails clearly instead of becoming part of the name
+Given `maubase migrate new <name> --bogus-flag`, or any other token
+starting with `-` that isn't `--dir`/`-dir` (in `--dir=value` or
+`--dir value` form),
+when it runs,
+then it fails with an error naming the unrecognized flag, rather than
+silently folding that token into the created file's name.

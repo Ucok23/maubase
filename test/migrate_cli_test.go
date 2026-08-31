@@ -14,7 +14,7 @@ import (
 	maubasedb "maubase/internal/db"
 )
 
-// Scenarios: spec/migrations-cli.md (MIGCLI-01..07)
+// Scenarios: spec/migrations-cli.md (MIGCLI-01..12)
 //
 // Unlike every other test in this package (which talks HTTP to an
 // in-process testserver), these exercise `maubase migrate ...` as an
@@ -49,14 +49,12 @@ func buildMaubaseCLI(t *testing.T) string {
 	return migrateCLIBinPath
 }
 
-// runMigrateCLI runs `maubase migrate <args...> --db dbPath --dir dir`
-// and returns its stdout, stderr, and exit code.
-func runMigrateCLI(t *testing.T, dbPath, dir string, args ...string) (stdout, stderr string, exitCode int) {
+// runCLI runs the built maubase binary with args verbatim and returns its
+// stdout, stderr, and exit code.
+func runCLI(t *testing.T, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
 	bin := buildMaubaseCLI(t)
-	fullArgs := append([]string{"migrate"}, args...)
-	fullArgs = append(fullArgs, "--db", dbPath, "--dir", dir)
-	cmd := exec.Command(bin, fullArgs...)
+	cmd := exec.Command(bin, args...)
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
@@ -65,10 +63,19 @@ func runMigrateCLI(t *testing.T, dbPath, dir string, args ...string) (stdout, st
 		if ee, ok := err.(*exec.ExitError); ok {
 			exitCode = ee.ExitCode()
 		} else {
-			t.Fatalf("run maubase migrate %v: %v", args, err)
+			t.Fatalf("run maubase %v: %v", args, err)
 		}
 	}
 	return outBuf.String(), errBuf.String(), exitCode
+}
+
+// runMigrateCLI runs `maubase migrate <args...> --db dbPath --dir dir`
+// and returns its stdout, stderr, and exit code.
+func runMigrateCLI(t *testing.T, dbPath, dir string, args ...string) (stdout, stderr string, exitCode int) {
+	t.Helper()
+	fullArgs := append([]string{"migrate"}, args...)
+	fullArgs = append(fullArgs, "--db", dbPath, "--dir", dir)
+	return runCLI(t, fullArgs...)
 }
 
 func writeMigrationFile(t *testing.T, dir, name, sqlText string) {
@@ -254,5 +261,101 @@ func TestMigrateCLI_UnknownSubcommandFailsWithoutTouchingTheDatabase(t *testing.
 	}
 	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
 		t.Fatalf("want the database file never created for an unknown subcommand, stat err: %v", err)
+	}
+}
+
+func TestMigrateCLI_NewScaffoldsNextNumberedFile(t *testing.T) {
+	// MIGCLI-08
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0001_create_widgets.sql", `CREATE TABLE widgets (id INTEGER PRIMARY KEY);`)
+
+	stdout, stderr, code := runCLI(t, "migrate", "new", "add widgets index", "--dir", dir)
+	if code != 0 {
+		t.Fatalf("migrate new: want exit 0, got %d: %s", code, stderr)
+	}
+	wantPath := filepath.Join(dir, "0002_add_widgets_index.sql")
+	if !strings.Contains(stdout, wantPath) {
+		t.Fatalf("want the created path %q reported, got: %s", wantPath, stdout)
+	}
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Fatalf("want %s to exist: %v", wantPath, err)
+	}
+}
+
+func TestMigrateCLI_NewCreatesTheMigrationsDirectoryIfMissing(t *testing.T) {
+	// MIGCLI-09
+	dir := filepath.Join(t.TempDir(), "not-yet-created")
+
+	stdout, stderr, code := runCLI(t, "migrate", "new", "init", "--dir", dir)
+	if code != 0 {
+		t.Fatalf("migrate new: want exit 0, got %d: %s", code, stderr)
+	}
+	wantPath := filepath.Join(dir, "0001_init.sql")
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Fatalf("want %s to exist (dir auto-created): %v", wantPath, err)
+	}
+	if !strings.Contains(stdout, wantPath) {
+		t.Fatalf("want the created path reported, got: %s", stdout)
+	}
+}
+
+func TestMigrateCLI_NewNumbersByHighestExistingNotFileCount(t *testing.T) {
+	// MIGCLI-10
+	dir := t.TempDir()
+	writeMigrationFile(t, dir, "0002_second.sql", `CREATE TABLE second (id INTEGER PRIMARY KEY);`)
+	writeMigrationFile(t, dir, "0003_third.sql", `CREATE TABLE third (id INTEGER PRIMARY KEY);`)
+	// Note: no 0001_ file — it was deleted. Only 2 files exist, but the
+	// next one must be 0004, not 0003 (file count) or 0002 (a naive
+	// "count + 1" off the survivors).
+
+	stdout, stderr, code := runCLI(t, "migrate", "new", "fourth", "--dir", dir)
+	if code != 0 {
+		t.Fatalf("migrate new: want exit 0, got %d: %s", code, stderr)
+	}
+	wantPath := filepath.Join(dir, "0004_fourth.sql")
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Fatalf("want %s to exist: %v", wantPath, err)
+	}
+	if !strings.Contains(stdout, wantPath) {
+		t.Fatalf("want the created path reported, got: %s", stdout)
+	}
+}
+
+func TestMigrateCLI_NewRequiresAName(t *testing.T) {
+	// MIGCLI-11
+	dir := filepath.Join(t.TempDir(), "should-not-be-created")
+
+	stdout, stderr, code := runCLI(t, "migrate", "new", "--dir", dir)
+	if code == 0 {
+		t.Fatalf("want a non-zero exit for a missing name, got 0, stdout: %s", stdout)
+	}
+	// Specifically the "new"-with-no-name usage message, not e.g. an
+	// unrecognized-subcommand error that would also happen to satisfy a
+	// bare "stderr is non-empty" check.
+	if !strings.Contains(stderr, "maubase migrate new <name>") {
+		t.Fatalf("want the missing-name usage message, got: %s", stderr)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("want no directory created when the name is missing, stat err: %v", err)
+	}
+}
+
+func TestMigrateCLI_NewUnrecognizedFlagFailsInsteadOfPollutingTheName(t *testing.T) {
+	// MIGCLI-12
+	dir := t.TempDir()
+
+	stdout, stderr, code := runCLI(t, "migrate", "new", "create posts", "--bogus-flag", "--dir", dir)
+	if code == 0 {
+		t.Fatalf("want a non-zero exit for an unrecognized flag, got 0, stdout: %s", stdout)
+	}
+	if !strings.Contains(stderr, "--bogus-flag") {
+		t.Fatalf("want the error to name the unrecognized flag, got: %s", stderr)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("want no file created when a flag is unrecognized, got: %v", entries)
 	}
 }

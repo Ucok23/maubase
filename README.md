@@ -97,9 +97,10 @@ What's here now (v1, step 1 of the roadmap):
     (`/admin/ui/tables/new`, `developer`+), live with no restart; or
     running raw `CREATE TABLE` in **SQL Studio** (`/admin/ui/sql`,
     `owner`-only). See the embedded admin UI section below for the latter
-    two. The `migrations/` files can also be applied or inspected without
-    starting the server: `maubase migrate up` and `maubase migrate status`
-    (see `spec/migrations-cli.md`; more subcommands are tracked in #144).
+    two. The `migrations/` files can also be scaffolded, applied, or
+    inspected without starting the server: `maubase migrate new <name>`,
+    `maubase migrate up`, and `maubase migrate status` (see
+    `spec/migrations-cli.md`; more subcommands are tracked in #144).
   - Known v1 limits: no composite primary keys, no BLOB columns, no
     filtering beyond pagination, single fixed owner-column convention
     (`owner_id`) rather than per-table config.
