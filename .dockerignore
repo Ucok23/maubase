@@ -1,0 +1,16 @@
+# Keep the build context small and avoid ever baking dev-only state or
+# secrets into an image layer.
+.git
+.gitignore
+data/
+bin/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env
+.env.*
+!.env.example
+e2e/node_modules
+e2e/test-results
+e2e/playwright-report

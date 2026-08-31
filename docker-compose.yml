@@ -1,0 +1,21 @@
+# Minimal local-dev / small single-node deployment example. Run
+# `maubase init` first (or create migrations/ yourself) so there's
+# something to bind-mount; see README.md's "Running it" section for
+# every MAUBASE_* env var below.
+services:
+  maubase:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      MAUBASE_ISSUER: http://localhost:8080
+      # Set both to create the first owner-plane account on first run —
+      # a no-op on every run after. Leave unset and create one via the
+      # API/admin UI instead if you'd rather not put a password here.
+      # MAUBASE_BOOTSTRAP_OWNER_EMAIL: owner@example.com
+      # MAUBASE_BOOTSTRAP_OWNER_PASSWORD: change-me
+    volumes:
+      # The SQLite database + uploaded files, and your own application
+      # migrations — both need to survive a container recreate.
+      - ./data:/app/data
+      - ./migrations:/app/migrations

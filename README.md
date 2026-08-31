@@ -273,7 +273,17 @@ below, and a `.gitignore` entry for `data/` (see spec/project-init.md).
 make run
 # or
 go build -o bin/maubase ./cmd/maubase && ./bin/maubase
+# or, in a container:
+docker compose up --build
 ```
+
+The `Dockerfile` is a multi-stage build — the same cgo-free static binary
+`make build` produces, shipped in a minimal `distroless/static` runtime
+image (needs CA certs for outbound HTTPS — Resend email, Google/GitHub
+OAuth token exchange — so not `scratch`). `MAUBASE_DB_PATH`/
+`MAUBASE_STORAGE_DIR`/`MAUBASE_MIGRATIONS_DIR`'s defaults resolve under
+the image's `/app` working directory; `docker-compose.yml` bind-mounts
+`./data` and `./migrations` there so they survive a container recreate.
 
 Config via env vars (see `internal/config`):
 
