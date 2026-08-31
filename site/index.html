@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>maubase — a backend you actually own</title>
+<meta name="description" content="A self-hostable Firebase/Supabase alternative: auto-generated REST APIs, OAuth 2.1, realtime, storage, and an admin UI, compiled into one Go binary you run yourself." />
+<link rel="icon" href="favicon.svg" type="image/svg+xml" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;900&family=Source+Serif+4:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="wordmark" href="#top">mau<span>base</span></a>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#why">Why</a>
+      <a href="#quickstart">Quickstart</a>
+      <a href="https://github.com/Ucok23/maubase">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <div class="wrap">
+      <div class="hero-copy">
+        <p class="eyebrow">Self-hosted backend</p>
+        <h1>maubase</h1>
+        <p class="subhead">A Firebase/Supabase alternative you actually own.</p>
+        <p class="lede">
+          Auto-generated REST APIs, OAuth 2.1 for your own users (MCP
+          clients included), realtime subscriptions, file storage, and
+          an admin UI — all compiled into one cgo-free Go binary you
+          build, run, and back up yourself. No dashboard to log into
+          that isn't yours.
+        </p>
+        <div class="cta-row">
+          <a class="btn primary" href="https://github.com/Ucok23/maubase">View on GitHub</a>
+          <a class="btn" href="https://github.com/Ucok23/maubase/blob/main/README.md">Read the README</a>
+        </div>
+      </div>
+      <div class="terminal" aria-hidden="true">
+        <div class="terminal-title">shell</div>
+        <pre><span class="prompt">$</span> go build -o maubase ./cmd/maubase &amp;&amp; ./maubase
+<span class="out">listening on :8080 (db: data/maubase.db)</span><span class="cursor"></span></pre>
+      </div>
+    </div>
+  </section>
+
+  <div class="spec-strip">
+    <div class="wrap">
+      <ul>
+        <li><strong>Go</strong> 1.27</li>
+        <li><strong>SQLite</strong>, no cgo</li>
+        <li>Single <strong>binary</strong></li>
+        <li><strong>Self-hosted</strong>, not a cloud account</li>
+      </ul>
+    </div>
+  </div>
+
+  <section class="features" id="features">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">What ships in the binary</p>
+        <h2>Every table becomes an API. Every user gets a session. Nothing calls home.</h2>
+      </div>
+      <div class="feature-grid">
+
+        <div class="feature">
+          <p class="path">/api/data/{table}</p>
+          <h3>Auto REST</h3>
+          <p>Create a table, get paginated CRUD for it — list, get, create, patch, delete — with row ownership via <code>owner_id</code> enforced automatically.</p>
+        </div>
+
+        <div class="feature">
+          <p class="path">/oauth/*</p>
+          <h3>OAuth 2.1 server</h3>
+          <p>Let your own users authorize third-party apps — MCP clients included — against your API. PKCE mandatory, refresh tokens rotate with reuse detection.</p>
+        </div>
+
+        <div class="feature">
+          <p class="path">/admin/ui</p>
+          <h3>Admin UI</h3>
+          <p>Create tables, browse and edit rows, run raw SQL in a built-in studio — live, no restart, and nothing extra to deploy or host.</p>
+        </div>
+
+        <div class="feature">
+          <p class="path">/api/realtime</p>
+          <h3>Realtime</h3>
+          <p>Subscribe to changes on your auto-REST tables. Single-process by default; add <code>MAUBASE_REDIS_URL</code> when you run more than one.</p>
+        </div>
+
+        <div class="feature">
+          <p class="path">/api/storage/files</p>
+          <h3>File storage</h3>
+          <p>Upload and download endpoints gated by the same OAuth scopes as everything else — no separate object-storage service to wire up.</p>
+        </div>
+
+        <div class="feature">
+          <p class="path">_policies</p>
+          <h3>Row-level access rules</h3>
+          <p>Declare who can read or write a table beyond simple ownership — per role, per column — without hand-rolling middleware for it.</p>
+        </div>
+
+        <div class="feature">
+          <p class="path">/api/auth/social/*</p>
+          <h3>Social login</h3>
+          <p>"Continue with Google" and "Continue with GitHub," wired into the same session system as email and password — not a bolt-on.</p>
+        </div>
+
+        <div class="feature">
+          <p class="path">maubase migrate</p>
+          <h3>Migrations CLI</h3>
+          <p>Scaffold, apply, revert, redo, and diff your schema against what's actually applied. Version history you can read, not a black box.</p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <section class="why" id="why">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Why not just use Supabase</p>
+        <h2>Same shape of tool. Different owner.</h2>
+      </div>
+      <blockquote>
+        “Move it, back it up, read the SQL — no migration off someone
+        else's platform.”
+      </blockquote>
+      <p class="lede">
+        Firebase and Supabase are a great deal, right up until you need
+        your data somewhere they don't operate, a compliance boundary
+        they don't meet, or a bill you didn't expect. maubase gives you
+        the same shape of tool — auto-REST, auth, realtime, storage —
+        compiled into one binary that runs on hardware you control. The
+        database is a SQLite file sitting next to it, not a black box
+        behind an API you'd have to reverse-engineer to leave.
+      </p>
+    </div>
+  </section>
+
+  <section class="quickstart" id="quickstart">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">From zero to an API</p>
+        <h2>Four commands in, one table live.</h2>
+      </div>
+      <div class="terminal">
+        <div class="terminal-title">shell</div>
+        <pre><span class="prompt">$</span> maubase init
+created migrations
+created migrations/0001_init.sql
+created .env.example
+created .gitignore
+
+<span class="prompt">$</span> maubase migrate new create_posts
+created migrations/0002_create_posts.sql
+<span class="out">                                        (edit the file, add your CREATE TABLE)</span>
+
+<span class="prompt">$</span> maubase migrate up
+applied 0002_create_posts.sql
+
+<span class="prompt">$</span> curl -s localhost:8080/api/data/posts
+<span class="out">[]</span><span class="cursor"></span></pre>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <span>maubase — self-hosted, single binary, your database.</span>
+    <a href="https://github.com/Ucok23/maubase">github.com/Ucok23/maubase</a>
+  </div>
+</footer>
+
+</body>
+</html>
