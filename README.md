@@ -103,7 +103,9 @@ What's here now (v1, step 1 of the roadmap):
     `spec/migrations-cli.md`; more subcommands are tracked in #144). A
     migration's forward SQL goes under a `-- +migrate Up` marker; an
     optional `-- +migrate Down` section is what `down`/`redo` run to
-    revert it.
+    revert it. `up`/`status` also record and check a checksum of each
+    migration's content, warning (never blocking) if an already-applied
+    file has been edited since it ran.
   - Known v1 limits: no composite primary keys, no BLOB columns, no
     filtering beyond pagination, single fixed owner-column convention
     (`owner_id`) rather than per-table config.

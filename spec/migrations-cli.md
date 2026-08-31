@@ -10,9 +10,9 @@ which the server always applies itself on boot regardless of this
 command.
 
 This is part of the fuller migration tooling tracked in issue #144
-(targeting a specific version, checksum verification, and drift capture
-from the admin UI/SQL Studio) — `new`, `up`, `down`, `redo`, and `status`
-exist so far.
+(targeting a specific version, and drift capture from the admin UI/SQL
+Studio) — `new`, `up`, `down`, `redo`, `status`, and checksum
+verification exist so far.
 
 A migration file's forward SQL goes under a `-- +migrate Up` marker line;
 an optional `-- +migrate Down` marker line after it holds the SQL that
@@ -198,3 +198,44 @@ Down` section,
 when an operator runs `maubase migrate redo`,
 then it fails the same way `down` would on that migration, and
 reapplies nothing — the migration is left applied exactly as before.
+
+## MIGCLI-24: Applying a migration records a checksum of its exact content
+Given a migration file,
+when `maubase migrate up` applies it,
+then a checksum of that file's exact on-disk content at the moment it
+was applied is recorded alongside its applied record.
+
+## MIGCLI-25: `maubase migrate status` flags an applied migration whose file has changed since it was applied
+Given an already-applied migration's file is edited afterward, so its
+current content no longer matches the checksum recorded when it ran,
+when an operator runs `maubase migrate status`,
+then that migration is reported as modified since it was applied,
+distinctly from an ordinary applied line.
+
+## MIGCLI-26: A migration applied before checksum verification existed isn't flagged as modified
+Given an applied migration's `schema_migrations` row has no checksum
+recorded (the pre-existing case — a row from before this feature, or a
+`schema_migrations` table predating the `checksum` column entirely),
+when an operator runs `maubase migrate status`,
+then it's reported as an ordinary applied migration, not as modified —
+there's nothing to compare its current content against, which isn't
+evidence of tampering.
+
+## MIGCLI-27: `maubase migrate up` warns about, but doesn't block on, a modified already-applied migration
+Given an already-applied migration's file has been edited since it ran,
+and a separate, unrelated migration is pending,
+when an operator runs `maubase migrate up`,
+then it prints a warning naming the modified migration, but still
+applies the pending migration normally — a modified migration warns,
+it never fails the whole command (this must stay safe to run
+unconditionally on every server boot, same as today).
+
+## MIGCLI-28: With no flags and no env overrides, `migrate` resolves its defaults against the current directory, like any ordinary command-line tool
+Given an operator has `cd`'d into their project directory (no
+`--db`/`--dir` flags, no `MAUBASE_DB_PATH`/`MAUBASE_MIGRATIONS_DIR` set)
+and created a `migrations/` folder there themselves,
+when they run `maubase migrate new <name>`, then `maubase migrate up`,
+then both resolve `MAUBASE_DB_PATH`/`MAUBASE_MIGRATIONS_DIR`'s literal
+defaults (`data/maubase.db`, `migrations`) relative to that directory —
+the same "just run it" experience as any ordinary CLI tool, not one
+that requires flags or env vars to work at all.
