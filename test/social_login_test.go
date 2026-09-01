@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"maubase/internal/social"
-	"maubase/internal/testserver"
+	"github.com/Ucok23/maubase/internal/social"
+	"github.com/Ucok23/maubase/internal/testserver"
 )
 
 // Scenarios: spec/social-login.md

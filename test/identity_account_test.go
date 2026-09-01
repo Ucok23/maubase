@@ -6,9 +6,9 @@ import (
 	"sync"
 	"testing"
 
-	"maubase/internal/email"
-	"maubase/internal/social"
-	"maubase/internal/testserver"
+	"github.com/Ucok23/maubase/internal/email"
+	"github.com/Ucok23/maubase/internal/social"
+	"github.com/Ucok23/maubase/internal/testserver"
 )
 
 // Scenarios: spec/identity.md IDNT-09..12

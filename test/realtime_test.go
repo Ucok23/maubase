@@ -10,7 +10,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"maubase/internal/testserver"
+	"github.com/Ucok23/maubase/internal/testserver"
 )
 
 // Scenarios: spec/realtime.md (RT-01..08).

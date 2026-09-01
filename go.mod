@@ -1,4 +1,4 @@
-module maubase
+module github.com/Ucok23/maubase
 
 go 1.27.0
 

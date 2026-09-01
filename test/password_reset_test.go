@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"maubase/internal/email"
-	"maubase/internal/testserver"
+	"github.com/Ucok23/maubase/internal/email"
+	"github.com/Ucok23/maubase/internal/testserver"
 )
 
 // Scenarios: spec/password-reset.md

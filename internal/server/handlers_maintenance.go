@@ -3,8 +3,8 @@ package server
 import (
 	"net/http"
 
-	"maubase/internal/audit"
-	"maubase/internal/ownerauth"
+	"github.com/Ucok23/maubase/internal/audit"
+	"github.com/Ucok23/maubase/internal/ownerauth"
 )
 
 // handlePurgeSessions deletes every expired row from the customer-plane

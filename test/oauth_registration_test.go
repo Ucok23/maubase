@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"maubase/internal/testserver"
+	"github.com/Ucok23/maubase/internal/testserver"
 )
 
 // Scenarios: spec/oauth-client-registration.md

@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"maubase/internal/realtime"
+	"github.com/Ucok23/maubase/internal/realtime"
 )
 
 // The methods in this file back the embedded admin UI's data browser

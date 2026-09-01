@@ -8,7 +8,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/ory/fosite"
 
-	"maubase/internal/oauth"
+	"github.com/Ucok23/maubase/internal/oauth"
 )
 
 // scopeRead matches internal/restapi's scopeRead: connecting requires

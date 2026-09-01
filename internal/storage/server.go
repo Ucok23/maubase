@@ -15,7 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"maubase/internal/oauth"
+	"github.com/Ucok23/maubase/internal/oauth"
 )
 
 const (

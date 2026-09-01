@@ -15,7 +15,7 @@ import (
 	"github.com/ory/fosite"
 	"github.com/ory/fosite/compose"
 
-	"maubase/internal/auth"
+	"github.com/Ucok23/maubase/internal/auth"
 )
 
 // Server holds everything the OAuth authorization server endpoints need:
