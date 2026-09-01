@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"maubase/internal/email"
-	"maubase/internal/social"
-	"maubase/internal/testserver"
+	"github.com/Ucok23/maubase/internal/email"
+	"github.com/Ucok23/maubase/internal/social"
+	"github.com/Ucok23/maubase/internal/testserver"
 )
 
 // Scenarios: spec/admin-ui.md (ADMINUI-01..30)

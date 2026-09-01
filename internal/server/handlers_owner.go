@@ -13,8 +13,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"maubase/internal/audit"
-	"maubase/internal/ownerauth"
+	"github.com/Ucok23/maubase/internal/audit"
+	"github.com/Ucok23/maubase/internal/ownerauth"
 )
 
 type ownerCtxKey string

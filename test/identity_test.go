@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"maubase/internal/testserver"
+	"github.com/Ucok23/maubase/internal/testserver"
 )
 
 // Scenarios: spec/identity.md

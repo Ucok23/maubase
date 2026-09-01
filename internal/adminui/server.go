@@ -26,13 +26,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"maubase/internal/audit"
-	"maubase/internal/auth"
-	"maubase/internal/oauth"
-	"maubase/internal/ownerauth"
-	"maubase/internal/ratelimit"
-	"maubase/internal/restapi"
-	"maubase/internal/storage"
+	"github.com/Ucok23/maubase/internal/audit"
+	"github.com/Ucok23/maubase/internal/auth"
+	"github.com/Ucok23/maubase/internal/oauth"
+	"github.com/Ucok23/maubase/internal/ownerauth"
+	"github.com/Ucok23/maubase/internal/ratelimit"
+	"github.com/Ucok23/maubase/internal/restapi"
+	"github.com/Ucok23/maubase/internal/storage"
 )
 
 //go:embed templates/*.html

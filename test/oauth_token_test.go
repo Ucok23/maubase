@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"maubase/internal/testserver"
+	"github.com/Ucok23/maubase/internal/testserver"
 )
 
 // Scenarios: spec/oauth-token.md

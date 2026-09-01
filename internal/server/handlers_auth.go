@@ -12,8 +12,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"maubase/internal/audit"
-	"maubase/internal/auth"
+	"github.com/Ucok23/maubase/internal/audit"
+	"github.com/Ucok23/maubase/internal/auth"
 )
 
 const sessionCookieName = auth.SessionCookieName

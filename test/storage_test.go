@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"maubase/internal/storage"
-	"maubase/internal/testserver"
+	"github.com/Ucok23/maubase/internal/storage"
+	"github.com/Ucok23/maubase/internal/testserver"
 )
 
 // Scenarios: spec/storage.md (STOR-01..08)

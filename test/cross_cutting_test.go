@@ -7,10 +7,10 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 
-	"maubase/internal/email"
-	"maubase/internal/realtime"
-	"maubase/internal/social"
-	"maubase/internal/testserver"
+	"github.com/Ucok23/maubase/internal/email"
+	"github.com/Ucok23/maubase/internal/realtime"
+	"github.com/Ucok23/maubase/internal/social"
+	"github.com/Ucok23/maubase/internal/testserver"
 )
 
 // Scenarios: spec/cross-cutting.md

@@ -6,8 +6,8 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 
-	"maubase/internal/realtime"
-	"maubase/internal/testserver"
+	"github.com/Ucok23/maubase/internal/realtime"
+	"github.com/Ucok23/maubase/internal/testserver"
 )
 
 // Scenario: spec/realtime.md RT-09. Two separate server processes (here,

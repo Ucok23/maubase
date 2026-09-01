@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"testing"
 
-	"maubase/internal/email"
-	"maubase/internal/social"
-	"maubase/internal/testserver"
+	"github.com/Ucok23/maubase/internal/email"
+	"github.com/Ucok23/maubase/internal/social"
+	"github.com/Ucok23/maubase/internal/testserver"
 )
 
 // Scenarios: spec/cross-cutting.md AUDIT-CUST-01

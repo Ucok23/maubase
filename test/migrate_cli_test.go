@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	maubasedb "maubase/internal/db"
+	maubasedb "github.com/Ucok23/maubase/internal/db"
 )
 
 // Scenarios: spec/migrations-cli.md (MIGCLI-01..41)
@@ -38,7 +38,7 @@ func buildMaubaseCLI(t *testing.T) string {
 			return
 		}
 		migrateCLIBinPath = filepath.Join(binDir, "maubase")
-		cmd := exec.Command("go", "build", "-o", migrateCLIBinPath, "maubase/cmd/maubase")
+		cmd := exec.Command("go", "build", "-o", migrateCLIBinPath, "github.com/Ucok23/maubase/cmd/maubase")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			migrateCLIBuildErr = fmt.Errorf("build maubase CLI: %v\n%s", err, out)
 		}

@@ -3,9 +3,12 @@
 A self-hostable Firebase/Supabase-alternative backend: single Go binary,
 SQLite by default (Postgres pluggable later), no Docker required.
 
-## Status: early scaffold
+## Status: v1
 
-What's here now (v1, step 1 of the roadmap):
+Everything below is implemented and tested — spec-first: every scenario
+in `spec/*.md` has a corresponding test in `test/*.go`, and nothing here
+is aspirational or in-progress. See "Not yet built" further down for
+what's deliberately out of scope rather than missing.
 
 - Pure-Go SQLite (`modernc.org/sqlite`, no cgo) with WAL mode + embedded
   file-based migrations, run automatically on startup.
@@ -462,3 +465,7 @@ different auth models, not one.
   `/.well-known/jwks.json` doesn't have this problem — the token's header
   carries the `kid` it was signed with, so the right key is always
   selectable from the published set.
+
+## License
+
+[MIT](LICENSE).

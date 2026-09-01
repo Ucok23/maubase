@@ -10,17 +10,17 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"maubase/internal/adminui"
-	"maubase/internal/audit"
-	"maubase/internal/auth"
-	"maubase/internal/email"
-	"maubase/internal/oauth"
-	"maubase/internal/ownerauth"
-	"maubase/internal/ratelimit"
-	"maubase/internal/realtime"
-	"maubase/internal/restapi"
-	"maubase/internal/social"
-	"maubase/internal/storage"
+	"github.com/Ucok23/maubase/internal/adminui"
+	"github.com/Ucok23/maubase/internal/audit"
+	"github.com/Ucok23/maubase/internal/auth"
+	"github.com/Ucok23/maubase/internal/email"
+	"github.com/Ucok23/maubase/internal/oauth"
+	"github.com/Ucok23/maubase/internal/ownerauth"
+	"github.com/Ucok23/maubase/internal/ratelimit"
+	"github.com/Ucok23/maubase/internal/realtime"
+	"github.com/Ucok23/maubase/internal/restapi"
+	"github.com/Ucok23/maubase/internal/social"
+	"github.com/Ucok23/maubase/internal/storage"
 )
 
 type Server struct {

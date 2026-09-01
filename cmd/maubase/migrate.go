@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"maubase/internal/config"
-	"maubase/internal/db"
+	"github.com/Ucok23/maubase/internal/config"
+	"github.com/Ucok23/maubase/internal/db"
 )
 
 // runMigrate implements `maubase migrate <subcommand>` — see
