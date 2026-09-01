@@ -3,6 +3,23 @@
 A self-hostable Firebase/Supabase-alternative backend: single Go binary,
 SQLite by default (Postgres pluggable later), no Docker required.
 
+## Quickstart
+
+```sh
+go install github.com/Ucok23/maubase/cmd/maubase@latest
+maubase serve
+```
+
+That's a working backend on `:8080` — a SQLite file next to it, no
+account or dashboard to sign into first. Starting a brand new project
+rather than just trying it out? Run `maubase init` first to scaffold a
+`migrations/` directory and `.env.example` for it (see
+`spec/project-init.md`).
+
+No Go toolchain, or would rather not install anything system-wide?
+Clone and build from source, or run it in a container — see
+"Running it" below for both, plus every `MAUBASE_*` env var.
+
 ## Status: v1
 
 Everything below is implemented and tested — spec-first: every scenario
