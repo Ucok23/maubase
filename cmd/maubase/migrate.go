@@ -457,34 +457,3 @@ func migrateDiff(sqlDB *sql.DB, dir string) error {
 	}
 	return fmt.Errorf("drift found in %d table(s), see above", len(results))
 }
-
-func printMigrateUsage() {
-	fmt.Fprint(os.Stderr, `maubase: a self-hostable backend
-
-Usage:
-  maubase                     Start the server
-  maubase init [dir]          Scaffold a brand new deployment (migrations/, .env.example, .gitignore)
-  maubase migrate new <name>  Scaffold the next-numbered application migration file
-  maubase migrate up          Apply pending application migrations
-  maubase migrate down [n]    Revert the last n applied migrations (default 1)
-  maubase migrate redo [n]    Revert then reapply the last n applied migrations (default 1)
-  maubase migrate to <ver>    Move to exactly <ver> (a filename or numeric prefix), forward or back
-  maubase migrate status      List application migrations and whether each is applied
-  maubase migrate diff        Report tables the database has that no applied migration explains (or vice versa)
-  maubase help                Show this message
-
-A migration file's SQL goes under a "-- +migrate Up" marker; an optional
-"-- +migrate Down" section (see "maubase migrate new"'s template) is what
-"migrate down"/"redo"/"to" run to revert it — a migration with no Down
-section can't be reverted.
-
-"migrate diff" catches schema drift from the admin UI's create-table
-form or SQL Studio, which change the live schema without ever touching
-migrations/ — it only reports (exits non-zero if it finds anything), it
-never modifies the database or writes a migration for you.
-
-Flags for "migrate" subcommands:
-  -dir string   application migrations directory (default: $MAUBASE_MIGRATIONS_DIR, or migrations)
-  -db string    path to the SQLite database file, "up"/"down"/"redo"/"to"/"status"/"diff" only (default: $MAUBASE_DB_PATH, or data/maubase.db)
-`)
-}

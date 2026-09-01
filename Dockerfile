@@ -39,4 +39,4 @@ COPY --from=builder /out/maubase /app/maubase
 VOLUME ["/app/data", "/app/migrations"]
 
 EXPOSE 8080
-ENTRYPOINT ["/app/maubase"]
+ENTRYPOINT ["/app/maubase", "serve"]

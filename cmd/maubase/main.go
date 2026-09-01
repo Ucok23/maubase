@@ -1,10 +1,15 @@
 // Command maubase is the single-binary server: it opens the database, runs
-// migrations, and serves the HTTP API. Run with no arguments to start the
-// server; run `maubase init` to scaffold a brand new deployment (see
-// init.go, spec/project-init.md); run `maubase migrate up`/`maubase
-// migrate status` to manage a deployment's own application-schema
-// migrations without starting the server (see migrate.go,
-// spec/migrations-cli.md).
+// migrations, and serves the HTTP API. `maubase serve` starts it — every
+// path (MAUBASE_DB_PATH, MAUBASE_MIGRATIONS_DIR, etc.) resolves relative
+// to the current directory by default, so running it from inside a
+// specific project directory serves that project, not some other one a
+// globally-installed binary happened to run from before. `maubase init`
+// scaffolds a brand new deployment (see init.go, spec/project-init.md);
+// `maubase migrate up`/`maubase migrate status` manage a deployment's own
+// application-schema migrations without starting the server (see
+// migrate.go, spec/migrations-cli.md). Bare `maubase`, or an unknown
+// command, prints usage rather than guessing what you meant — see
+// spec/cli.md.
 package main
 
 import (
@@ -34,29 +39,34 @@ import (
 )
 
 func main() {
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "init":
-			if err := runInit(os.Args[2:]); err != nil {
-				log.Fatal(err)
-			}
-			return
-		case "migrate":
-			if err := runMigrate(os.Args[2:]); err != nil {
-				log.Fatal(err)
-			}
-			return
-		case "help", "-h", "--help":
-			printMigrateUsage()
-			return
-		default:
-			printMigrateUsage()
-			log.Fatalf("unknown command %q", os.Args[1])
-		}
+	// Bare `maubase` — no subcommand at all — prints usage rather than
+	// starting the server: every other action here (init, migrate ...)
+	// is an explicit verb, so "type nothing, get a long-running server"
+	// was the odd one out, and silently binding a port when someone
+	// just ran the command to see what it does is exactly the kind of
+	// surprise a CLI shouldn't produce.
+	if len(os.Args) < 2 {
+		printUsage()
+		return
 	}
-
-	if err := run(); err != nil {
-		log.Fatal(err)
+	switch os.Args[1] {
+	case "serve":
+		if err := run(); err != nil {
+			log.Fatal(err)
+		}
+	case "init":
+		if err := runInit(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+	case "migrate":
+		if err := runMigrate(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+	case "help", "-h", "--help":
+		printUsage()
+	default:
+		printUsage()
+		log.Fatalf("unknown command %q", os.Args[1])
 	}
 }
 
@@ -215,4 +225,40 @@ func bootstrapOwner(ctx context.Context, svc *ownerauth.Service, cfg config.Conf
 	}
 	log.Printf("bootstrapped first owner: %s", owner.Email)
 	return nil
+}
+
+func printUsage() {
+	fmt.Fprint(os.Stderr, `maubase: a self-hostable backend
+
+Usage:
+  maubase serve                Start the server
+  maubase init [dir]           Scaffold a brand new deployment (migrations/, .env.example, .gitignore)
+  maubase migrate new <name>   Scaffold the next-numbered application migration file
+  maubase migrate up           Apply pending application migrations
+  maubase migrate down [n]     Revert the last n applied migrations (default 1)
+  maubase migrate redo [n]     Revert then reapply the last n applied migrations (default 1)
+  maubase migrate to <ver>     Move to exactly <ver> (a filename or numeric prefix), forward or back
+  maubase migrate status       List application migrations and whether each is applied
+  maubase migrate diff         Report tables the database has that no applied migration explains (or vice versa)
+  maubase help                 Show this message
+
+Every path below (and MAUBASE_DB_PATH/MAUBASE_MIGRATIONS_DIR generally)
+resolves relative to the current directory — run "maubase serve" from
+inside a specific project to serve that project, not whichever one a
+globally-installed binary last happened to run from.
+
+A migration file's SQL goes under a "-- +migrate Up" marker; an optional
+"-- +migrate Down" section (see "maubase migrate new"'s template) is what
+"migrate down"/"redo"/"to" run to revert it — a migration with no Down
+section can't be reverted.
+
+"migrate diff" catches schema drift from the admin UI's create-table
+form or SQL Studio, which change the live schema without ever touching
+migrations/ — it only reports (exits non-zero if it finds anything), it
+never modifies the database or writes a migration for you.
+
+Flags for "migrate" subcommands:
+  -dir string   application migrations directory (default: $MAUBASE_MIGRATIONS_DIR, or migrations)
+  -db string    path to the SQLite database file, "up"/"down"/"redo"/"to"/"status"/"diff" only (default: $MAUBASE_DB_PATH, or data/maubase.db)
+`)
 }
