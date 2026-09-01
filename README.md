@@ -309,6 +309,27 @@ OAuth token exchange — so not `scratch`). `MAUBASE_DB_PATH`/
 the image's `/app` working directory; `docker-compose.yml` bind-mounts
 `./data` and `./migrations` there so they survive a container recreate.
 
+maubase is single-tenant: one `maubase serve` process serves exactly one
+project's database, the same way you'd run your own Postgres instance
+per project. There's no built-in multi-project mode, and none is
+planned — running several projects at once just means running several
+independent processes, each with its own `MAUBASE_ADDR`/
+`MAUBASE_DB_PATH`/`MAUBASE_ISSUER` (two processes can't bind the same
+port regardless of how independent their configs otherwise are):
+
+```sh
+# project A
+cd ~/projects/app-a && MAUBASE_ADDR=:8080 MAUBASE_DB_PATH=data/a.db maubase serve
+
+# project B, elsewhere, at the same time
+cd ~/projects/app-b && MAUBASE_ADDR=:8081 MAUBASE_DB_PATH=data/b.db maubase serve
+```
+
+Supervising multiple such processes (systemd units, one Compose service
+per project, etc.) is left to whatever you'd normally use for that —
+same as Postgres itself doesn't manage running several Postgres
+clusters.
+
 Config via env vars (see `internal/config`):
 
 - `MAUBASE_ADDR` (default `:8080`)
