@@ -45,3 +45,24 @@ Given any of the three help spellings,
 when an operator runs one,
 then `maubase` prints the same usage `maubase` with no arguments does,
 and exits successfully.
+
+## CLI-05: `maubase version`, `-v`, and `--version` all report what's installed
+Given any of the three version spellings,
+when an operator runs one,
+then `maubase` prints a version line and exits successfully — so someone
+with three self-hosted projects, each pointed at a globally-installed
+`maubase`, can tell which build they're actually running before filing
+a bug or deciding whether to reinstall.
+
+The reported version reflects how the binary was actually built, since
+that's what Go's toolchain embeds automatically with no extra build
+steps required:
+- Installed via `go install .../maubase@vX.Y.Z` (or `@latest`): the
+  real module version, e.g. `v1.1.0`.
+- Built locally from a git checkout (`go build`/`make build`): a
+  VCS-derived pseudo-version (e.g. `v1.1.1-0.20260901085303-5c4f8d5cc456`,
+  with a `+dirty` suffix if the working tree has uncommitted changes),
+  since modern Go embeds VCS info automatically there too.
+- Built with no VCS info available at all (e.g. the Docker image,
+  whose build context deliberately excludes `.git`, or an older Go
+  toolchain): `(devel)` alone.

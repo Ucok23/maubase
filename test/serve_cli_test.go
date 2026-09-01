@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Scenarios: spec/cli.md (CLI-01..04)
+// Scenarios: spec/cli.md (CLI-01..05)
 //
 // Same exec-the-binary approach as test/migrate_cli_test.go
 // (buildMaubaseCLI, runCLI, runCLIInDir are shared from there) — the
@@ -28,7 +28,7 @@ func TestServeCLI_BareInvocationPrintsUsageWithoutTouchingAnything(t *testing.T)
 		t.Fatalf("bare maubase: want exit 0, got %d: %s", code, stdout+stderr)
 	}
 	out := stdout + stderr
-	for _, want := range []string{"Usage:", "maubase serve", "maubase init", "maubase migrate"} {
+	for _, want := range []string{"Usage:", "maubase serve", "maubase init", "maubase migrate", "maubase version"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("want usage to mention %q, got: %s", want, out)
 		}
@@ -67,6 +67,38 @@ func TestServeCLI_UnrecognizedCommandFailsClearly(t *testing.T) {
 	}
 	if !strings.Contains(stdout+stderr, "Usage:") {
 		t.Fatalf("want usage printed alongside the error, got: %s", stdout+stderr)
+	}
+}
+
+func TestServeCLI_VersionSpellingsAllReportTheSameVersion(t *testing.T) {
+	// CLI-05
+	var outputs []string
+	for _, args := range [][]string{{"version"}, {"-v"}, {"--version"}} {
+		stdout, stderr, code := runCLI(t, args...)
+		if code != 0 {
+			t.Fatalf("maubase %v: want exit 0, got %d: %s", args, code, stdout+stderr)
+		}
+		if !strings.Contains(stdout, "maubase") {
+			t.Fatalf("maubase %v: want output to mention \"maubase\", got: %s", args, stdout)
+		}
+		outputs = append(outputs, stdout)
+	}
+	for _, out := range outputs[1:] {
+		if out != outputs[0] {
+			t.Fatalf("want all three version spellings to report the same thing, got %q and %q", outputs[0], out)
+		}
+	}
+
+	// The test binary is a plain `go build` from this git checkout (see
+	// buildMaubaseCLI), not a `go install .../maubase@vX.Y.Z` pinned to
+	// an exact tag — so it won't report a clean release version. Modern
+	// Go derives a VCS-based pseudo-version automatically in this case
+	// (see spec/cli.md CLI-05); assert the Go version it names instead
+	// of the exact version string, which depends on repo state (commits
+	// since the last tag, working-tree dirtiness) that varies by when
+	// and where this test runs.
+	if !strings.Contains(outputs[0], "(go1.") {
+		t.Fatalf("want the output to name the Go version it was built with, got: %s", outputs[0])
 	}
 }
 

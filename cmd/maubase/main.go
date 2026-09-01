@@ -64,6 +64,8 @@ func main() {
 		}
 	case "help", "-h", "--help":
 		printUsage()
+	case "version", "-v", "--version":
+		fmt.Println(versionString())
 	default:
 		printUsage()
 		log.Fatalf("unknown command %q", os.Args[1])
@@ -241,6 +243,7 @@ Usage:
   maubase migrate status       List application migrations and whether each is applied
   maubase migrate diff         Report tables the database has that no applied migration explains (or vice versa)
   maubase help                 Show this message
+  maubase version              Show the maubase version
 
 Every path below (and MAUBASE_DB_PATH/MAUBASE_MIGRATIONS_DIR generally)
 resolves relative to the current directory — run "maubase serve" from
