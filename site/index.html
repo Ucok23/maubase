@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>maubase — a backend you actually own</title>
+<meta name="description" content="A self-hostable Firebase/Supabase alternative: auto-generated REST APIs, OAuth 2.1, realtime, storage, and an admin UI, compiled into one Go binary you run yourself." />
+<link rel="icon" href="favicon.svg" type="image/svg+xml" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;900&family=Source+Serif+4:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="wordmark" href="#top">mau<span>base</span></a>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#why">Why</a>
+      <a href="#quickstart">Quickstart</a>
+      <a href="https://github.com/Ucok23/maubase">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <div class="wrap">
+      <div class="hero-top">
+        <p class="eyebrow">Self-hosted backend</p>
+        <h1>maubase</h1>
+      </div>
+      <div class="hero-bottom">
+        <div class="hero-copy">
+          <p class="subhead">A Firebase/Supabase alternative you actually own.</p>
+          <p class="lede">
+            Auto-generated REST APIs, OAuth 2.1 for your own users (MCP
+            clients included), realtime subscriptions, file storage,
+            and an admin UI — all compiled into one cgo-free Go binary
+            you build, run, and back up yourself. No dashboard to log
+            into that isn't yours.
+          </p>
+          <div class="cta-row">
+            <a class="btn primary" href="https://github.com/Ucok23/maubase">View on GitHub</a>
+            <a class="btn" href="https://github.com/Ucok23/maubase/blob/main/README.md">Read the README</a>
+          </div>
+        </div>
+        <div class="terminal" aria-hidden="true">
+          <div class="terminal-title">shell</div>
+          <pre><span class="prompt">$</span> go build -o maubase ./cmd/maubase &amp;&amp; ./maubase
+<span class="out">listening on :8080 (db: data/maubase.db)</span><span class="cursor"></span></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="spec-strip">
+    <div class="wrap">
+      <ul>
+        <li><strong>Go</strong> 1.27</li>
+        <li><strong>SQLite</strong>, no cgo</li>
+        <li>Single <strong>binary</strong></li>
+        <li><strong>Self-hosted</strong>, not a cloud account</li>
+      </ul>
+    </div>
+  </div>
+
+  <section class="features-intro" id="features">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">What ships in the binary</p>
+        <h2>Every table becomes an API. Every user gets a session. Nothing calls home.</h2>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature-section">
+    <div class="wrap">
+      <div class="feature-copy">
+        <p class="eyebrow">/api/data/{table}</p>
+        <h2>Auto REST</h2>
+        <p class="lede">
+          Every table that isn't reserved for maubase's own use becomes
+          a full CRUD API the moment it exists — whether you created it
+          with a migration, the admin UI's create-table form, or a raw
+          <code>CREATE TABLE</code> in SQL Studio. Rows are scoped to
+          whoever created them through an <code>owner_id</code> column,
+          checked on every request: nobody sees a row they didn't
+          create unless you say otherwise with an access rule.
+        </p>
+      </div>
+      <div class="terminal">
+        <div class="terminal-title">shell</div>
+        <pre><span class="prompt">$</span> curl -X POST localhost:8080/api/data/posts \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"title": "Hello"}'
+<span class="out">{"id": "b7e1...", "title": "Hello"}</span>
+
+<span class="prompt">$</span> curl "localhost:8080/api/data/posts?limit=10"
+<span class="out">[{"id": "b7e1...", "title": "Hello"}]</span>
+
+<span class="prompt">$</span> curl -X PATCH .../api/data/posts/b7e1... \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"title": "Edited"}'<span class="cursor"></span></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature-section flip tone-surface">
+    <div class="wrap">
+      <div class="feature-copy">
+        <p class="eyebrow">/oauth/*</p>
+        <h2>OAuth 2.1 server</h2>
+        <p class="lede">
+          Every deployment is also its own authorization server. Your
+          users can grant a third-party app — an MCP client, a script a
+          teammate wrote, a mobile app you didn't build — scoped access
+          to their own data, the same flow behind any "Sign in
+          with..." button. PKCE is mandatory, and refresh tokens rotate
+          on every use; replaying a stale one is treated as theft and
+          revokes the whole grant chain.
+        </p>
+      </div>
+      <div class="terminal">
+        <div class="terminal-title">shell</div>
+        <pre><span class="out">GET /oauth/authorize
+  ?response_type=code&amp;client_id=...
+  &amp;redirect_uri=...&amp;scope=records:read
+  &amp;code_challenge=...
+  &amp;code_challenge_method=S256</span>
+
+<span class="prompt">$</span> curl -X POST localhost:8080/oauth/token \
+  -d grant_type=authorization_code \
+  -d code=$CODE \
+  -d code_verifier=$VERIFIER \
+  -d client_id=$CLIENT_ID
+<span class="out">{"access_token": "...", "expires_in": 3600}</span><span class="cursor"></span></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature-section">
+    <div class="wrap">
+      <div class="feature-copy">
+        <p class="eyebrow">/admin/ui</p>
+        <h2>Admin UI</h2>
+        <p class="lede">
+          A server-rendered admin panel ships in the same binary as the
+          API — nothing separate to deploy, no static assets to host,
+          no extra API keys just to look at your own data. Create
+          tables live, browse and edit rows, manage owner accounts, and
+          read the audit log, all from routes the binary already
+          serves.
+        </p>
+      </div>
+      <ul class="route-list">
+        <li><code>/admin/ui/tables/new</code><span>Create a table — live, no restart</span></li>
+        <li><code>/admin/ui/sql</code><span>SQL Studio — raw queries against the live database</span></li>
+        <li><code>/admin/ui/users</code><span>Browse and edit customer rows</span></li>
+        <li><code>/admin/ui/audit-log</code><span>Every login, create, and delete — who, when</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="feature-section flip tone-surface">
+    <div class="wrap">
+      <div class="feature-copy">
+        <p class="eyebrow">/api/realtime</p>
+        <h2>Realtime</h2>
+        <p class="lede">
+          One WebSocket endpoint delivers created/updated/deleted
+          events for any auto-REST table you're allowed to read.
+          Fan-out is single-process by default, the right answer for a
+          small deployment; set <code>MAUBASE_REDIS_URL</code> once
+          you're running more than one instance and need events to
+          reach every process.
+        </p>
+      </div>
+      <div class="terminal">
+        <div class="terminal-title">js</div>
+        <pre><span class="out">const</span> ws = new WebSocket(
+  "ws://localhost:8080/api/realtime" +
+  "?access_token=" + token
+);
+ws.onopen = () =&gt; ws.send(JSON.stringify({
+  type: "subscribe", collection: "posts"
+}));
+ws.onmessage = (e) =&gt; console.log(e.data);
+<span class="out">// { type: "created", collection: "posts" }</span><span class="cursor"></span></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature-section">
+    <div class="wrap">
+      <div class="feature-copy">
+        <p class="eyebrow">/api/storage/files</p>
+        <h2>File storage</h2>
+        <p class="lede">
+          Upload and download endpoints that sit right next to the rest
+          of the API, gated by the same <code>files:read</code>/
+          <code>files:write</code> OAuth scopes as everything else — no
+          separate object-storage service, no separate credentials to
+          issue. A file belongs to whoever uploaded it, the same
+          ownership model as any other row.
+        </p>
+      </div>
+      <div class="terminal">
+        <div class="terminal-title">shell</div>
+        <pre><span class="prompt">$</span> curl -X POST .../api/storage/files \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@report.pdf"
+<span class="out">{"id": "9c4a...", "filename": "report.pdf"}</span>
+
+<span class="prompt">$</span> curl .../api/storage/files/9c4a.../content \
+  -o report.pdf<span class="cursor"></span></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature-section flip tone-surface">
+    <div class="wrap">
+      <div class="feature-copy">
+        <p class="eyebrow">_policies</p>
+        <h2>Row-level access rules</h2>
+        <p class="lede">
+          <code>owner_id</code> gets you per-row ownership for free;
+          <code>_policies</code> gets you the rest. Declare, per table
+          and per operation, whether a collection is owner-only, shared
+          read-only, or denied outright — enforced the same way
+          ownership is, without hand-rolling middleware for it.
+        </p>
+      </div>
+      <table class="policies-table">
+        <caption>_policies rows</caption>
+        <thead>
+          <tr><th scope="col">collection</th><th scope="col">operation</th><th scope="col">rule</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>comments</td><td>read</td><td>shared</td></tr>
+          <tr><td>comments</td><td>create</td><td>owner</td></tr>
+          <tr><td>invoices</td><td>read</td><td>owner</td></tr>
+          <tr><td>invoices</td><td>delete</td><td>denied</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="feature-section">
+    <div class="wrap">
+      <div class="feature-copy">
+        <p class="eyebrow">/api/auth/social/*</p>
+        <h2>Social login</h2>
+        <p class="lede">
+          "Continue with Google" and "Continue with GitHub," wired into
+          the exact same session system as email and password — not a
+          bolt-on identity provider off to the side. Each provider is
+          independently optional: leave its client ID unset and that
+          one route 404s, nothing else changes.
+        </p>
+      </div>
+      <div class="terminal">
+        <div class="terminal-title">shell</div>
+        <pre><span class="prompt">$</span> curl -i localhost:8080/api/auth/social/google
+HTTP/1.1 302 Found
+<span class="out">Location: https://accounts.google.com/o/oauth2/v2/auth?...</span><span class="cursor"></span></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature-section flip tone-surface">
+    <div class="wrap">
+      <div class="feature-copy">
+        <p class="eyebrow">maubase migrate</p>
+        <h2>Migrations CLI</h2>
+        <p class="lede">
+          Beyond scaffolding and applying migrations (see the quickstart
+          below), the same command reverts, redoes, and jumps straight
+          to a specific version — and <code>diff</code> catches schema
+          drift introduced outside any migration file, like a table
+          someone created by hand in SQL Studio.
+        </p>
+      </div>
+      <div class="terminal">
+        <div class="terminal-title">shell</div>
+        <pre><span class="prompt">$</span> maubase migrate diff
+<span class="out">unexplained  widgets  (no migration explains it)</span>
+
+<span class="prompt">$</span> maubase migrate down
+reverted 0004_add_comments_index.sql
+
+<span class="prompt">$</span> maubase migrate to 0002_create_posts.sql
+reverted 0004_add_comments_index.sql
+reverted 0003_create_comments.sql<span class="cursor"></span></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="why" id="why">
+    <div class="wrap">
+      <div class="why-grid">
+        <div>
+          <p class="eyebrow">Why not just use Supabase</p>
+          <h2>Same shape of tool. Different owner.</h2>
+          <blockquote>
+            “Move it, back it up, read the SQL — no migration off
+            someone else's platform.”
+          </blockquote>
+          <p class="lede">
+            Firebase and Supabase are a great deal, right up until you
+            need your data somewhere they don't operate, a compliance
+            boundary they don't meet, or a bill you didn't expect.
+            maubase gives you the same shape of tool — auto-REST, auth,
+            realtime, storage — compiled into one binary that runs on
+            hardware you control.
+          </p>
+        </div>
+        <table class="compare">
+          <caption>Cloud BaaS vs. maubase</caption>
+          <thead>
+            <tr><th scope="col"></th><th scope="col">Cloud BaaS</th><th scope="col">maubase</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Where your data lives</th><td>Their servers</td><td>Yours</td></tr>
+            <tr><th scope="row">If they shut down or raise prices</th><td>You migrate, fast</td><td>Nothing — it's already yours</td></tr>
+            <tr><th scope="row">Monthly bill</th><td>Scales with usage</td><td>Whatever your server costs</td></tr>
+            <tr><th scope="row">Compliance boundary</th><td>Theirs to draw</td><td>Yours to set</td></tr>
+            <tr><th scope="row">Inspecting the schema</th><td>Through their dashboard</td><td><code>sqlite3 data/maubase.db</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="quickstart tone-surface" id="quickstart">
+    <div class="wrap quickstart-grid">
+      <div class="section-head">
+        <p class="eyebrow">From zero to an API</p>
+        <h2>Four commands in, one table live.</h2>
+        <p class="lede">No dashboard to click through first — the schema, the migration history, and the running server are all right here in the terminal.</p>
+      </div>
+      <div class="terminal">
+        <div class="terminal-title">shell</div>
+        <pre><span class="prompt">$</span> maubase init
+created migrations
+created migrations/0001_init.sql
+created .env.example
+created .gitignore
+
+<span class="prompt">$</span> maubase migrate new create_posts
+created migrations/0002_create_posts.sql
+<span class="out"># edit it, add your CREATE TABLE</span>
+
+<span class="prompt">$</span> maubase migrate up
+applied 0002_create_posts.sql
+
+<span class="prompt">$</span> curl -s localhost:8080/api/data/posts
+<span class="out">[]</span><span class="cursor"></span></pre>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <span>maubase — self-hosted, single binary, your database.</span>
+    <a href="https://github.com/Ucok23/maubase">github.com/Ucok23/maubase</a>
+  </div>
+</footer>
+
+</body>
+</html>
