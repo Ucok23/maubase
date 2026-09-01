@@ -5,7 +5,9 @@ new project — see issue #146. It creates the on-disk pieces a
 deployment needs before `maubase migrate`/the server itself has
 anything to work with: a starter `migrations/` directory (see
 spec/migrations-cli.md), a `.env.example` documenting every `MAUBASE_*`
-env var, and a `.gitignore` entry for the default `data/` directory.
+env var, a Claude Code skill so an AI agent working in the project
+understands what maubase is without reading its source (see issue
+#161), and a `.gitignore` entry for the default `data/` directory.
 `dir` defaults to `.` (the current directory) when omitted.
 
 This is meant to run once, against a fresh or not-yet-maubase-configured
@@ -43,8 +45,8 @@ when an operator runs `maubase init`,
 then it leaves the file exactly as it was — no duplicate entry added.
 
 ## INIT-05: `maubase init` refuses to overwrite an already-initialized project
-Given `migrations/` and/or `.env.example` already exist in the target
-directory,
+Given `migrations/`, `.env.example`, and/or `.claude/skills/maubase/SKILL.md`
+already exist in the target directory,
 when an operator runs `maubase init` again,
 then it fails with an error naming exactly which of those already
 exist, and creates or modifies nothing at all — including not touching
@@ -55,5 +57,28 @@ blocked it.
 Given a directory path is passed as `maubase init`'s argument,
 when it runs,
 then every file it creates (`migrations/0001_init.sql`, `.env.example`,
-`.gitignore`) is created under that directory, not the current working
-directory.
+`.claude/skills/maubase/SKILL.md`, `.gitignore`) is created under that
+directory, not the current working directory.
+
+## INIT-07: `maubase init` scaffolds a Claude Code skill describing what maubase is
+Given an empty (or otherwise maubase-unconfigured) directory,
+when an operator runs `maubase init`,
+then it creates `.claude/skills/maubase/SKILL.md` — a skill (frontmatter
+`name`/`description`) covering maubase's own stable concepts: the
+`serve`/`migrate`/`version` commands, the migration-always convention
+(never editing live schema without a migration, and why `migrate diff`
+matters), and the API surface every deployment exposes (auth, auto-REST
++ `_policies`, storage, realtime, OAuth, admin UI) — not this project's
+own dynamic state (its actual tables, migration status, or configured
+env vars), which the skill instead points an agent at live commands for
+(`maubase migrate status`, reading `.env`) rather than embedding a
+snapshot that goes stale the moment the schema changes.
+
+The generated content is wrapped in a `<!-- maubase:begin
+vX.Y.Z -->`/`<!-- maubase:end -->` managed block naming the exact
+maubase version (`maubase version`'s own version string) that generated
+it, so staleness after a later upgrade is visible rather than silent —
+and so a future regeneration only replaces that block, leaving anything
+a person appends below `<!-- maubase:end -->` untouched. (The
+regeneration command itself doesn't exist yet — see issue #161 — this
+scenario only covers first-time scaffolding.)

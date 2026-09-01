@@ -29,7 +29,16 @@ func versionString() string {
 		// this project, but fail informatively rather than panicking.
 		return "maubase: unknown version (no build info embedded)"
 	}
+	return fmt.Sprintf("maubase %s (%s)", moduleVersion(info), info.GoVersion)
+}
 
+// moduleVersion reports just the version part of versionString() above,
+// with no Go-toolchain suffix — used wherever a version needs to be
+// embedded as data rather than printed for a human (e.g. the marker
+// skill.go stamps into the scaffolded skill file, so a later re-init can
+// tell whether its content is stale against the binary that generated
+// it).
+func moduleVersion(info *debug.BuildInfo) string {
 	version := info.Main.Version
 	if version == "" {
 		version = "(devel)"
@@ -57,5 +66,15 @@ func versionString() string {
 		}
 	}
 
-	return fmt.Sprintf("maubase %s (%s)", version, info.GoVersion)
+	return version
+}
+
+// currentModuleVersion is moduleVersion for callers (skill.go) that don't
+// already have a *debug.BuildInfo in hand.
+func currentModuleVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "(unknown)"
+	}
+	return moduleVersion(info)
 }
