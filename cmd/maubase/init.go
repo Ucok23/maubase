@@ -9,12 +9,14 @@ import (
 
 // runInit implements `maubase init [dir]` — see spec/project-init.md.
 // It scaffolds a brand new maubase deployment: a starter migrations/
-// directory, a .env.example documenting every MAUBASE_* env var, and a
+// directory, a .env.example documenting every MAUBASE_* env var, a
+// Claude Code skill (skillRelPath) so an agent working in this project
+// understands what maubase is without reading its source, and a
 // .gitignore entry for the default data/ directory. Meant to run once,
 // against a fresh (or not-yet-maubase-configured) directory — it
-// refuses rather than overwrites if migrations/ or .env.example already
-// exist, since either one existing means this project has already been
-// initialized.
+// refuses rather than overwrites if migrations/, .env.example, or the
+// skill file already exist, since any of those existing means this
+// project has already been initialized.
 func runInit(args []string) error {
 	dir := "."
 	switch len(args) {
@@ -31,6 +33,7 @@ func runInit(args []string) error {
 
 	migrationsDir := filepath.Join(dir, "migrations")
 	envExamplePath := filepath.Join(dir, ".env.example")
+	skillPath := filepath.Join(dir, skillRelPath)
 
 	var conflicts []string
 	if _, err := os.Stat(migrationsDir); err == nil {
@@ -38,6 +41,9 @@ func runInit(args []string) error {
 	}
 	if _, err := os.Stat(envExamplePath); err == nil {
 		conflicts = append(conflicts, envExamplePath)
+	}
+	if _, err := os.Stat(skillPath); err == nil {
+		conflicts = append(conflicts, skillPath)
 	}
 	if len(conflicts) > 0 {
 		return fmt.Errorf("already initialized: %s already exist(s)", strings.Join(conflicts, ", "))
@@ -57,6 +63,14 @@ func runInit(args []string) error {
 		return fmt.Errorf("write %s: %w", envExamplePath, err)
 	}
 	fmt.Printf("created %s\n", envExamplePath)
+
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Dir(skillPath), err)
+	}
+	if err := os.WriteFile(skillPath, []byte(renderSkill()), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", skillPath, err)
+	}
+	fmt.Printf("created %s\n", skillPath)
 
 	gitignorePath := filepath.Join(dir, ".gitignore")
 	if err := ensureGitignoreHasDataDir(gitignorePath); err != nil {
