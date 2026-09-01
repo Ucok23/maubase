@@ -46,10 +46,17 @@ type Server struct {
 	// any authenticated records:write caller force the server to buffer
 	// an arbitrarily large JSON payload. See decodeBody.
 	maxBodyBytes int64
+	// devMode gates GET /api/schema (spec/schema-introspection.md) —
+	// true only when MAUBASE_ENV=development. Schema introspection is
+	// genuinely useful for local tooling (an agent inspecting what
+	// tables/columns/policies actually exist) but is extra surface a
+	// production deployment shouldn't carry: false by default, same
+	// fail-closed posture as config.Config.Env itself.
+	devMode bool
 }
 
-func NewServer(db *sql.DB, registry *Registry, oauthSvc *oauth.Server, broker *realtime.Broker, maxBodyBytes int64) *Server {
-	s := &Server{db: db, oauth: oauthSvc, broker: broker, maxBodyBytes: maxBodyBytes}
+func NewServer(db *sql.DB, registry *Registry, oauthSvc *oauth.Server, broker *realtime.Broker, maxBodyBytes int64, devMode bool) *Server {
+	s := &Server{db: db, oauth: oauthSvc, broker: broker, maxBodyBytes: maxBodyBytes, devMode: devMode}
 	s.registry.Store(registry)
 	return s
 }
@@ -113,6 +120,10 @@ func ownerGateValue(col *Collection, record map[string]any) string {
 // gated by an OAuth access token with the appropriate scope (records:read
 // for GET, records:write for everything else) via s.oauth.RequireScope —
 // there is no anonymous access to any collection.
+//
+// Also registers GET /api/schema (spec/schema-introspection.md), gated
+// the same records:read way but only reachable at all when s.devMode —
+// see requireDevMode.
 func (s *Server) Mount(r chi.Router) {
 	r.Route("/api/data/{collection}", func(r chi.Router) {
 		r.Get("/", s.oauth.RequireScope(scopeRead, s.handleList))
@@ -121,6 +132,32 @@ func (s *Server) Mount(r chi.Router) {
 		r.Patch("/{id}", s.oauth.RequireScope(scopeWrite, s.handleUpdate))
 		r.Delete("/{id}", s.oauth.RequireScope(scopeWrite, s.handleDelete))
 	})
+	r.Get("/api/schema", s.requireDevMode(s.oauth.RequireScope(scopeRead, s.handleSchema)))
+}
+
+// requireDevMode 404s outright — not 401/403 — when s.devMode is false,
+// before next (and so before any token check) ever runs. 404, matching
+// how an unconfigured social-login provider 404s (spec/social-login.md)
+// rather than erroring: a disabled feature should look like it doesn't
+// exist, not like it exists but is refusing you, which would confirm to
+// an unauthenticated caller that the route is there at all.
+func (s *Server) requireDevMode(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.devMode {
+			http.NotFound(w, r)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// handleSchema returns every collection GET /api/data/* would ever
+// expose — the exact live registry, so it reflects a table the admin
+// UI or SQL Studio added at runtime (ReloadSchema) without a restart,
+// same as auto-REST itself does. Requires records:read like any other
+// read (see Mount) and, before that, s.devMode (see requireDevMode).
+func (s *Server) handleSchema(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"collections": s.reg().All()})
 }
 
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {

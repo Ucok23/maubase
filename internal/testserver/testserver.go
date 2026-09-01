@@ -71,6 +71,13 @@ type Options struct {
 	// as config.Load".
 	MaxRequestBodyBytes int64
 
+	// DevMode gates GET /api/schema the way MAUBASE_ENV=development does
+	// on a real deployment (see internal/restapi, spec/schema-
+	// introspection.md). False (the default) for any test not
+	// specifically exercising that endpoint, matching config.Load's own
+	// fail-closed default.
+	DevMode bool
+
 	// EmailSender backs POST /api/auth/forgot-password. Nil defaults to
 	// a fresh email.NewFakeSender() — a test that wants to inspect what
 	// was "sent" (the reset link, notably) should construct its own
@@ -223,7 +230,7 @@ func newCustom(t *testing.T, opts Options) (string, error) {
 	if maxRequestBodyBytes == 0 {
 		maxRequestBodyBytes = 1024 << 10 // 1MB, matching config's default
 	}
-	restapiSvc := restapi.NewServer(sqlDB, registry, oauthSvc, broker, maxRequestBodyBytes)
+	restapiSvc := restapi.NewServer(sqlDB, registry, oauthSvc, broker, maxRequestBodyBytes, opts.DevMode)
 
 	storageBackend := opts.StorageBackend
 	if storageBackend == nil {

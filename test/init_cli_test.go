@@ -88,9 +88,47 @@ func TestInitCLI_ScaffoldsAgentSkill(t *testing.T) {
 	if !strings.Contains(got, "<!-- maubase:begin "+moduleVersion+" -->") {
 		t.Fatalf("want the managed block stamped with %q, got: %s", moduleVersion, got)
 	}
-	for _, want := range []string{"maubase migrate", "records:read", "records:write", "/api/data/", "/admin/ui/sql", "migrate diff"} {
+	for _, want := range []string{"maubase migrate", "GET /api/schema", "records:read", "MAUBASE_ENV=development", "migrate diff", "/api/data/{table}"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("want the skill to mention %q, got: %s", want, got)
+		}
+	}
+	// This is a pointer file, not a manual: it must not restate the
+	// fixed API surface as its own prose (that's a second copy of
+	// spec/*.md to keep in sync by hand) — every topic should be a
+	// link, not paragraphs describing routes/scopes itself.
+	for _, mustNotDuplicate := range []string{"records:write` (POST", "owner_id` can never be set"} {
+		if strings.Contains(got, mustNotDuplicate) {
+			t.Fatalf("want the skill to link to spec/*.md instead of restating its content, but found %q inlined: %s", mustNotDuplicate, got)
+		}
+	}
+
+	// Every topic links to its spec so an agent fetches the actual,
+	// version-matched behavior instead of guessing or trusting whatever
+	// it might otherwise recall about maubase's source.
+	for _, specFile := range []string{
+		"identity.md", "auto-rest.md", "access-rules.md", "storage.md",
+		"realtime.md", "oauth-token.md", "admin-ui.md", "migrations-cli.md",
+		"schema-introspection.md", "README.md",
+	} {
+		if !strings.Contains(got, "raw.githubusercontent.com/Ucok23/maubase/") || !strings.Contains(got, "/spec/"+specFile) {
+			t.Fatalf("want a raw.githubusercontent.com link to spec/%s, got: %s", specFile, got)
+		}
+	}
+	// Every such link must be pinned to one single ref (a real tag or a
+	// full commit hash) — never "main", which is exactly the kind of
+	// drift-prone reference this whole mechanism exists to avoid.
+	refs := regexp.MustCompile(`raw\.githubusercontent\.com/Ucok23/maubase/([^/]+)/spec/`).FindAllStringSubmatch(got, -1)
+	if len(refs) == 0 {
+		t.Fatalf("want at least one spec link, got: %s", got)
+	}
+	firstRef := refs[0][1]
+	if firstRef == "main" {
+		t.Fatalf("want spec links pinned to a real ref, not the moving \"main\" branch: %s", got)
+	}
+	for _, m := range refs[1:] {
+		if m[1] != firstRef {
+			t.Fatalf("want every spec link pinned to the same ref (%q), also saw %q", firstRef, m[1])
 		}
 	}
 

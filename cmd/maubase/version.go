@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"runtime/debug"
 )
 
@@ -77,4 +78,41 @@ func currentModuleVersion() string {
 		return "(unknown)"
 	}
 	return moduleVersion(info)
+}
+
+// cleanTagPattern matches a real release tag (v1.2.3) — as opposed to a
+// VCS-derived pseudo-version (v1.2.3-0.20260901...-<hash>[+dirty]) or the
+// literal "(devel)".
+var cleanTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+
+// currentDocRef resolves a git ref that skill.go can build a stable
+// raw.githubusercontent.com URL from, so the skill points an agent at
+// the exact spec content this binary was actually built from rather
+// than whatever "main" happens to say by the time the agent reads it
+// (or, worse, whatever the agent itself remembers about this codebase
+// from unrelated context):
+//
+//   - Built via `go install .../maubase@vX.Y.Z`: Main.Version is that
+//     clean tag — use it directly.
+//   - Built locally from a git checkout: Main.Version is a pseudo-
+//     version, but Go also embeds the real commit hash (vcs.revision)
+//     — an immutable ref that works whether or not it happens to be
+//     tagged.
+//   - No VCS info at all (e.g. the Docker image, whose build context
+//     excludes .git): nothing to resolve — fall back to "main" as a
+//     best effort; it just means the linked content isn't pinned.
+func currentDocRef() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "main"
+	}
+	if cleanTagPattern.MatchString(info.Main.Version) {
+		return info.Main.Version
+	}
+	for _, s := range info.Settings {
+		if s.Key == "vcs.revision" && s.Value != "" {
+			return s.Value
+		}
+	}
+	return "main"
 }

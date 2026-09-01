@@ -367,6 +367,14 @@ Config via env vars (see `internal/config`):
 - `MAUBASE_REDIS_URL` (default unset) — set to a `redis://` connection
   string shared by every instance to upgrade realtime fan-out from
   single-process to cross-process; see "Realtime scaling" below
+- `MAUBASE_ENV` (default `production`) — set to `development` to enable
+  `GET /api/schema` (see `spec/schema-introspection.md`), a live
+  read of the actual current auto-REST collections/columns/access
+  rules, requiring a `records:read` token like any other read. Off by
+  default and 404s outright (not 401/403) when not `development` — this
+  is extra surface useful for local tooling (an agent introspecting the
+  schema, notably — see the scaffolded `.claude/skills/maubase/SKILL.md`),
+  not something a production deployment should carry
 
 ## Realtime scaling
 

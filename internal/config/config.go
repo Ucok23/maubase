@@ -94,6 +94,20 @@ type Config struct {
 	// redis://[:password@]host:port[/db] connection string; empty means
 	// "just this one process," which is what most deployments want.
 	RedisURL string
+
+	// Env gates anything that's useful for local tooling (an agent
+	// introspecting the schema, say) but is extra attack surface on a
+	// production deployment — currently just GET /api/schema (see
+	// internal/restapi). Defaults to "production", the safe side: a
+	// deployment has to opt in to "development" explicitly, never the
+	// other way around, so forgetting to set this can't silently expose
+	// anything.
+	Env string
+}
+
+// IsDevelopment reports whether Env opts into development-only surface.
+func (c Config) IsDevelopment() bool {
+	return c.Env == "development"
 }
 
 func Load() Config {
@@ -119,6 +133,7 @@ func Load() Config {
 		GitHubClientSecret:     getEnv("MAUBASE_GITHUB_CLIENT_SECRET", ""),
 		SocialLoginRedirectURL: getEnv("MAUBASE_SOCIAL_LOGIN_REDIRECT_URL", ""),
 		RedisURL:               getEnv("MAUBASE_REDIS_URL", ""),
+		Env:                    getEnv("MAUBASE_ENV", "production"),
 	}
 }
 
