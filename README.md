@@ -279,7 +279,7 @@ below, and a `.gitignore` entry for `data/` (see spec/project-init.md).
 ```sh
 make run
 # or
-go build -o bin/maubase ./cmd/maubase && ./bin/maubase
+go build -o bin/maubase ./cmd/maubase && ./bin/maubase serve
 # or, in a container:
 docker compose up --build
 ```

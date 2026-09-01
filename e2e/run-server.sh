@@ -24,4 +24,4 @@ export MAUBASE_BOOTSTRAP_OWNER_EMAIL="${MAUBASE_BOOTSTRAP_OWNER_EMAIL:-owner@e2e
 export MAUBASE_BOOTSTRAP_OWNER_PASSWORD="${MAUBASE_BOOTSTRAP_OWNER_PASSWORD:-e2e-password-123}"
 
 go build -o "$datadir/maubase" ./cmd/maubase
-exec "$datadir/maubase"
+exec "$datadir/maubase" serve

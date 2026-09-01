@@ -4,7 +4,7 @@ build:
 	CGO_ENABLED=0 go build -o bin/maubase ./cmd/maubase
 
 run:
-	go run ./cmd/maubase
+	go run ./cmd/maubase serve
 
 test:
 	go test ./...
