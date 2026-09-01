@@ -191,4 +191,9 @@ MAUBASE_SOCIAL_LOGIN_REDIRECT_URL=
 # fan-out from single-process to cross-process. Leave unset for a
 # single-instance deployment.
 MAUBASE_REDIS_URL=
+
+# Set to "development" to enable GET /api/schema (live collection/column/
+# access-rule introspection, useful for local tooling) — 404s outright
+# when this isn't "development". Never set this in production.
+MAUBASE_ENV=production
 `

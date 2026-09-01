@@ -60,19 +60,24 @@ then every file it creates (`migrations/0001_init.sql`, `.env.example`,
 `.claude/skills/maubase/SKILL.md`, `.gitignore`) is created under that
 directory, not the current working directory.
 
-## INIT-07: `maubase init` scaffolds a Claude Code skill describing what maubase is
+## INIT-07: `maubase init` scaffolds a Claude Code skill pointing at what maubase is
 Given an empty (or otherwise maubase-unconfigured) directory,
 when an operator runs `maubase init`,
 then it creates `.claude/skills/maubase/SKILL.md` — a skill (frontmatter
-`name`/`description`) covering maubase's own stable concepts: the
-`serve`/`migrate`/`version` commands, the migration-always convention
-(never editing live schema without a migration, and why `migrate diff`
-matters), and the API surface every deployment exposes (auth, auto-REST
-+ `_policies`, storage, realtime, OAuth, admin UI) — not this project's
-own dynamic state (its actual tables, migration status, or configured
-env vars), which the skill instead points an agent at live commands for
-(`maubase migrate status`, reading `.env`) rather than embedding a
-snapshot that goes stale the moment the schema changes.
+`name`/`description`) that is deliberately a pointer file, not a
+manual: for this project's own current state (its actual tables,
+columns, and access rules — created by a migration, the admin UI's
+create-table form, or SQL Studio, all *after* this file is generated,
+so it can never describe them) it names live sources instead of
+embedding a snapshot that goes stale the moment the schema changes —
+`GET /api/schema` (spec/schema-introspection.md) foremost, with
+`maubase migrate status`/`migrations/*.sql` as the fallback when that's
+disabled. For maubase's own fixed concepts (the `serve`/`migrate`/
+`version` commands, the migration-always convention and why
+`migrate diff` matters, and the API surface every deployment exposes)
+it links each spec file rather than restating it as fresh prose — see
+the link-pinning paragraph below for why not doing that matters just
+as much as the live-state pointer above.
 
 The generated content is wrapped in a `<!-- maubase:begin
 vX.Y.Z -->`/`<!-- maubase:end -->` managed block naming the exact
@@ -82,3 +87,17 @@ and so a future regeneration only replaces that block, leaving anything
 a person appends below `<!-- maubase:end -->` untouched. (The
 regeneration command itself doesn't exist yet — see issue #161 — this
 scenario only covers first-time scaffolding.)
+
+Each API area also links to its own spec file at a stable
+`raw.githubusercontent.com/Ucok23/maubase/<ref>/spec/*.md` URL — never
+`main`, which drifts. `<ref>` is resolved from the same build info the
+version marker above comes from: the exact release tag for a `go
+install .../maubase@vX.Y.Z` build, or the exact commit hash for a local
+`go build`/`make build` from a git checkout (falling back to `main`
+only when neither is available at all, e.g. a Docker build, whose
+context excludes `.git`). The point isn't just staleness-avoidance: an
+agent working in the scaffolded project has no reliable way to know
+maubase's actual behavior on its own — training data predates this
+version, and any memory it might have of maubase's own source from
+unrelated context isn't this project's build — so the skill explicitly
+tells it to fetch the pinned spec rather than guess or trust either.
