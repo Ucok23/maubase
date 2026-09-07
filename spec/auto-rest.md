@@ -176,3 +176,180 @@ in the response distinguishing that from "there are only 50 rows total"
 building an export that assumes it saw everything. `PATCH`/`DELETE`
 aren't paginated and are unaffected; this applies to every `GET
 /api/data/{table}` list request.
+
+## Example: a complete curl walkthrough
+
+Everything above is the contract; this is what actually calling it looks
+like, start to finish, against a real server with nothing pre-configured
+— every command below was run against an actual `maubase serve` to
+produce the response shown, not written from memory. It uses plain curl
+and openssl (no SDK) specifically to show the real wire format
+`/api/data/*` requires, PKCE dance included; a real app should almost
+never do this by hand — use `sdk/js`'s `client.data.connect()`/
+`handleRedirectCallback()` (see `sdk/js/README.md`) or an equivalent
+OAuth library, which do exactly this underneath.
+
+**0. A migration creating an owner-scoped table** (see
+`spec/project-init.md`; `maubase migrate new notes` scaffolds this file):
+
+```sql
+-- +migrate Up
+CREATE TABLE notes (
+  id       TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL,
+  title    TEXT NOT NULL,
+  body     TEXT
+);
+
+-- +migrate Down
+DROP TABLE notes;
+```
+
+`maubase migrate up`, then `maubase serve` — `notes` is live at
+`/api/data/notes` immediately, no restart, no separate registration step.
+
+**1. Register an OAuth client.** RFC 7591 dynamic registration
+(`spec/oauth-client-registration.md`) — no admin step, any app can call
+this once for itself:
+
+```sh
+BASE=http://localhost:8080
+
+CLIENT=$(curl -s -X POST $BASE/oauth/register \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "redirect_uris": ["https://app.example.com/callback"],
+    "token_endpoint_auth_method": "none",
+    "grant_types": ["authorization_code", "refresh_token"],
+    "scope": "profile records:read records:write"
+  }')
+echo "$CLIENT"
+# {"client_id":"8c436d47-...","client_id_issued_at":1788796255,"client_secret_expires_at":0,
+#  "redirect_uris":["https://app.example.com/callback"],"token_endpoint_auth_method":"none",
+#  "grant_types":["authorization_code","refresh_token"],"response_types":["code"],
+#  "scope":"profile records:read records:write"}
+CLIENT_ID=$(echo "$CLIENT" | grep -o '"client_id":"[^"]*"' | head -1 | cut -d'"' -f4)
+```
+
+**2. Sign up a user.** This is the plain identity plane
+(`spec/identity.md`) — a real session cookie, not an OAuth token, and per
+IDNT-01 it signs the caller in too, so `cj.txt` is ready to use below:
+
+```sh
+curl -s -c cj.txt -X POST $BASE/api/auth/signup \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.com","password":"correcthorse"}'
+# {"user":{"created_at":"2026-09-07T15:50:56Z","email":"you@example.com",
+#          "id":"09104368-459c-4585-83ac-180b3b81be39"}}
+```
+
+**3. Generate a PKCE pair.** A real client does this itself; openssl
+stands in for one here:
+
+```sh
+VERIFIER=$(openssl rand -base64 32 | tr -d '=+/\n' | cut -c1-64)
+CHALLENGE=$(printf '%s' "$VERIFIER" | openssl dgst -sha256 -binary | openssl base64 | tr -d '=' | tr '+/' '-_' | tr -d '\n')
+REDIRECT_URI="https://app.example.com/callback"
+SCOPE="profile records:read records:write"
+STATE="xyz123state"
+```
+
+**4. `GET /oauth/authorize`.** First time for this user+client, so this
+is a `200` consent screen, not a redirect
+(`spec/oauth-authorize-and-consent.md` AUTHZ-02) — `-G --data-urlencode`
+builds the query string so PKCE/scope characters get encoded correctly:
+
+```sh
+curl -s -b cj.txt -c cj.txt -G "$BASE/oauth/authorize" \
+  --data-urlencode "response_type=code" \
+  --data-urlencode "client_id=$CLIENT_ID" \
+  --data-urlencode "redirect_uri=$REDIRECT_URI" \
+  --data-urlencode "scope=$SCOPE" \
+  --data-urlencode "state=$STATE" \
+  --data-urlencode "code_challenge=$CHALLENGE" \
+  --data-urlencode "code_challenge_method=S256" \
+  -o consent.html -w "status=%{http_code}\n"
+```
+
+The consent page carries the original request back in a hidden
+`oauth_request` field (HTML-escaped) — pull it out and undo the escaping
+before resubmitting it:
+
+```sh
+RAW=$(grep -o 'name="oauth_request" value="[^"]*"' consent.html | sed -E 's/^name="oauth_request" value="//; s/"$//')
+RAW=$(printf '%s' "$RAW" | sed 's/&amp;/\&/g; s/&#43;/+/g')
+```
+
+**5. `POST /oauth/authorize` — approve consent.** `granted` repeats once
+per approved scope; approving redirects (`303`) with a `code`
+(AUTHZ-03), never a body:
+
+```sh
+curl -s -b cj.txt -c cj.txt -X POST "$BASE/oauth/authorize" \
+  --data-urlencode "step=consent" \
+  --data-urlencode "oauth_request=$RAW" \
+  --data-urlencode "granted=profile" \
+  --data-urlencode "granted=records:read" \
+  --data-urlencode "granted=records:write" \
+  --data-urlencode "decision=allow" \
+  -D headers.txt -o /dev/null -w "status=%{http_code}\n"
+# status=303
+# Location: https://app.example.com/callback?code=ory_ac_c-rzGwGy9DXC8qgX-...&scope=profile+records%3Aread+records%3Awrite&state=xyz123state
+```
+
+A real client is actually redirected here by the browser; this example
+never sends anything to `app.example.com` — it just reads the `code`
+back out of the `Location` header instead of following it.
+
+**6. `POST /oauth/token` — exchange the code.** `spec/oauth-token.md`
+TOK-01, matching PKCE verifier required:
+
+```sh
+LOCATION=$(grep -i '^location:' headers.txt | sed 's/^[Ll]ocation: //' | tr -d '\r')
+CODE=$(printf '%s' "$LOCATION" | grep -o 'code=[^&]*' | cut -d= -f2)
+
+TOKEN=$(curl -s -X POST "$BASE/oauth/token" \
+  --data-urlencode "grant_type=authorization_code" \
+  --data-urlencode "code=$CODE" \
+  --data-urlencode "redirect_uri=$REDIRECT_URI" \
+  --data-urlencode "client_id=$CLIENT_ID" \
+  --data-urlencode "code_verifier=$VERIFIER")
+echo "$TOKEN"
+# {"access_token":"eyJhbGciOiJSUzI1NiIs...","expires_in":3600,
+#  "scope":"profile records:read records:write","token_type":"bearer"}
+ACCESS_TOKEN=$(echo "$TOKEN" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
+```
+
+**7. Use the token against `/api/data/notes`:**
+
+```sh
+# create (REST-CRUD-01) — owner_id is the token's own subject, never
+# something the client could set (REST-OWNERSHIP-03)
+curl -s -X POST "$BASE/api/data/notes" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"title": "first note", "body": "hello"}'
+# {"body":"hello","id":"79ac2e8d-...","owner_id":"09104368-...","title":"first note"}
+ID=79ac2e8d-...  # from the response above
+
+# list — every list response is {records, limit, offset} (REST-PAGINATION-01)
+curl -s "$BASE/api/data/notes" -H "Authorization: Bearer $ACCESS_TOKEN"
+# {"limit":50,"offset":0,"records":[{"body":"hello","id":"79ac2e8d-...",
+#  "owner_id":"09104368-...","title":"first note"}]}
+
+# get by id
+curl -s "$BASE/api/data/notes/$ID" -H "Authorization: Bearer $ACCESS_TOKEN"
+
+# patch — only the field(s) sent change (REST-CRUD-03)
+curl -s -X PATCH "$BASE/api/data/notes/$ID" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"body": "updated"}'
+# {"body":"updated","id":"79ac2e8d-...","owner_id":"09104368-...","title":"first note"}
+
+# delete, then confirm it's gone (REST-CRUD-04)
+curl -s -o /dev/null -w "status=%{http_code}\n" -X DELETE "$BASE/api/data/notes/$ID" \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+# status=204
+curl -s -o /dev/null -w "status=%{http_code}\n" "$BASE/api/data/notes/$ID" \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+# status=404
+```

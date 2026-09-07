@@ -455,6 +455,9 @@ server* for third-party apps. See `spec/social-login.md`.
 Tests are spec-first: [`spec/`](spec/) describes expected behavior from an
 external caller's point of view (browser, app, MCP client) — written and
 reviewed independently of the implementation, not derived from reading it.
+`spec/` also doubles as a browsable docs site (docsify, no build step —
+see `spec/README.md`) with runnable examples alongside the scenarios,
+e.g. `spec/auto-rest.md`'s full curl walkthrough.
 [`test/`](test/) is a black-box suite that drives a real, fully-wired
 server over plain HTTP (via `internal/testserver`) and asserts each spec
 scenario by its ID (e.g. `IDNT-04`, `AUTHZ-06`). A failing test names the
