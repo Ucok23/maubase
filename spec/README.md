@@ -6,6 +6,21 @@ written before, and independently of, how the code happens to be
 implemented: a spec describes what should be true; a test in `test/`
 verifies the running server actually does that.
 
+This directory is also a browsable site (`index.html`/`_sidebar.md`,
+[docsify](https://docsify.js.org/) — no build step, it renders these
+exact `.md` files, nothing duplicated). Preview it locally:
+
+```sh
+python3 -m http.server 8000   # from the repo root
+# then open http://localhost:8000/spec/
+```
+
+A feature's scenarios are the contract (Given/When/Then); where a
+feature also has a runnable walkthrough (e.g. auto-rest.md's "Example:
+a complete curl walkthrough"), it's a `## Example` section in that same
+file, grounded by actually running it against a real server — not a
+separate doc to keep in sync.
+
 **Rule: never derive a spec from reading the implementation.** If a scenario
 here turns out not to match the code, that's either a bug to fix or a
 behavior change to negotiate — not a reason to edit the spec to match

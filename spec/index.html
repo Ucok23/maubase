@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>maubase spec</title>
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+  <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+  <meta name="description" content="maubase: expected behavior, from the point of view of whoever is outside the server.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsify@4/lib/themes/vue.css">
+  <style>
+    :root { --theme-color: #3451b2; }
+    .markdown-section code { color: #476582; }
+    .app-name-link img { height: 28px; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    // This site has no content of its own — it's docsify rendering the
+    // same spec/*.md files the maubase skill/AGENTS.md point an agent
+    // at (see spec/project-init.md), just with navigation, search, and
+    // syntax highlighting on top. There is exactly one source for this
+    // content: spec/*.md. Nothing here duplicates or rewrites it.
+    window.$docsify = {
+      name: 'maubase',
+      repo: 'https://github.com/Ucok23/maubase',
+      loadSidebar: true,
+      subMaxLevel: 2,
+      auto2top: true,
+      homepage: 'README.md',
+      search: {
+        maxAge: 86400000,
+        paths: 'auto',
+        placeholder: 'Search the spec...',
+      },
+      copyCode: {
+        buttonText: 'Copy',
+        errorText: 'Error',
+        successText: 'Copied',
+      },
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify@4"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify/lib/plugins/search.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify-copy-code@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-sql.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
+</body>
+</html>
