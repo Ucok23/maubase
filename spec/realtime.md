@@ -52,6 +52,40 @@ file — needs `MAUBASE_REDIS_URL` set to a shared Redis instance
 then also sees writes made on any other process sharing that Redis. See
 RT-09.
 
+## Example: subscribing with a WebSocket client
+
+curl doesn't speak WebSocket usefully for this, so this uses Node's
+built-in `WebSocket` (no dependency needed, Node 22+) instead — the
+access token is the same `records:read`-scoped one `spec/auto-rest.md`'s
+walkthrough shows how to get, passed as `?access_token=` since a browser
+`WebSocket` can't set an `Authorization` header:
+
+```js
+// subscribe.js
+const token = process.argv[2];
+const ws = new WebSocket(`ws://localhost:8080/api/realtime?access_token=${token}`);
+ws.addEventListener('open', () => {
+  ws.send(JSON.stringify({ type: 'subscribe', collection: 'notes' }));
+});
+ws.addEventListener('message', (ev) => console.log(ev.data));
+```
+
+```sh
+node subscribe.js "$ACCESS_TOKEN" &
+
+# in another shell, using the same auto-rest.md walkthrough:
+curl -s -X POST "$BASE/api/data/notes" -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"title":"realtime test","body":"pushed live"}'
+```
+
+The subscriber prints the change as it happens, with no polling:
+
+```json
+{"type":"created","collection":"notes","record":{"body":"pushed live",
+ "id":"d6ef7058-029d-4f7c-861e-fcbcc43700d3",
+ "owner_id":"a6075f2b-4a00-43de-b7ee-b1ad3d93b1f7","title":"realtime test"}}
+```
+
 ## RT-01: Connecting requires the same scope GET would
 Given a WebSocket handshake to `/api/realtime` with no access token, or
 one without `records:read`,

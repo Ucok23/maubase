@@ -19,6 +19,14 @@ redirect, the second only ever runs as the tail end of one):
   `MAUBASE_SOCIAL_LOGIN_REDIRECT_URL` — the deployer's own frontend page;
   maubase doesn't render one of its own.
 
+No curl walkthrough here, deliberately: both endpoints are browser
+redirects through a real Google/GitHub login page maubase doesn't
+control, so there's nothing to usefully script — clicking "Continue
+with Google" in an actual browser, against real
+`MAUBASE_GOOGLE_CLIENT_ID`/`_SECRET` (or GitHub's equivalent), is the
+only way to exercise this end to end. `spec/identity.md`'s walkthrough
+covers the account/session shape you land in either way.
+
 `provider` is `google` or `github`. Each requires its own client
 id/secret (`MAUBASE_GOOGLE_CLIENT_ID`/`_SECRET`,
 `MAUBASE_GITHUB_CLIENT_ID`/`_SECRET`) from that provider's own developer

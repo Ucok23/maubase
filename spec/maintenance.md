@@ -102,6 +102,21 @@ the re-rendered login page with an error), and requests beyond the
 limit get `429 Too Many Requests` with a `Retry-After` header, until the
 window resets.
 
+## Example: triggering a purge with curl
+
+Owner-plane session cookie, `admin` role or above (MAINT-01):
+
+```sh
+curl -s -b owner_cj.txt -X POST $BASE/admin/maintenance/purge-sessions
+```
+```json
+{"owner_sessions_purged":0,"reset_tokens_purged":0,"sessions_purged":0}
+```
+
+Zero here just means nothing had actually expired yet in this
+deployment — the counts (MAINT-02/MAINT-07) reflect whatever was really
+removed, not a fixed shape with placeholder numbers.
+
 ## MAINT-05: A rate-limited owner-plane login attempt is itself audit logged
 Given the owner-plane login throttle (`POST /admin/auth/login` or
 `POST /admin/ui/login`) is currently exhausted for some client IP,

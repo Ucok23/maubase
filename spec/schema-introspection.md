@@ -61,3 +61,46 @@ when a caller with `records:read` `GET`s `/api/schema` afterward, in
 the same running process,
 then the new table appears — this is the live registry `/api/data/*`
 itself reads from, not a snapshot taken at startup.
+
+## Example: introspecting a live deployment with curl
+
+Given a project with a `notes` table (see `spec/auto-rest.md`'s
+walkthrough) and `MAUBASE_ENV=development`, and an access token with
+`records:read` (same OAuth dance as that walkthrough, just this scope):
+
+```sh
+curl -s "$BASE/api/schema" -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+```json
+{
+  "collections": [
+    {
+      "name": "notes",
+      "columns": [
+        {"name": "id", "type": "TEXT", "not_null": false, "primary_key": true},
+        {"name": "owner_id", "type": "TEXT", "not_null": true, "primary_key": false},
+        {"name": "title", "type": "TEXT", "not_null": true, "primary_key": false},
+        {"name": "body", "type": "TEXT", "not_null": false, "primary_key": false}
+      ],
+      "pk_column": "id",
+      "pk_is_integer": false,
+      "owner_column": "owner_id",
+      "read_rule": "owner",
+      "create_rule": "owner",
+      "update_rule": "owner",
+      "delete_rule": "owner"
+    }
+  ]
+}
+```
+
+Note `users`/`oauth_clients`/etc. never appear (SCHEMA-03) — this is
+exactly, and only, what `/api/data/*` itself exposes. And with
+`MAUBASE_ENV` unset or `production` (the default), that same request —
+token and all — is a bare `404` (SCHEMA-02):
+
+```sh
+curl -s -o /dev/null -w "status=%{http_code}\n" "$BASE/api/schema" \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+# status=404
+```

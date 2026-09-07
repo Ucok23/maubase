@@ -269,3 +269,46 @@ parameterized query, so this was very likely already safe by
 construction, but untested — cheap insurance against a future refactor
 that starts handling the raw token unsafely (string-concatenated into a
 query, say).
+
+## Example: bootstrap, sign in, and add a teammate with curl
+
+The very first owner account only ever comes from
+`MAUBASE_BOOTSTRAP_OWNER_EMAIL`/`_PASSWORD` (OWNR-01) — there's no
+signup route on this plane. Everything else here is a plain JSON API,
+cookie-based like `/api/auth/*` but a completely separate session
+(OWNR-09):
+
+```sh
+BASE=http://localhost:8080
+# with MAUBASE_BOOTSTRAP_OWNER_EMAIL=owner@example.com
+#      MAUBASE_BOOTSTRAP_OWNER_PASSWORD=correcthorse set for this run
+
+curl -s -c owner_cj.txt -X POST $BASE/admin/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"owner@example.com","password":"correcthorse"}'
+# {"expires_at":"2026-09-15T00:22:30.050403674+07:00"}
+
+curl -s -b owner_cj.txt $BASE/admin/auth/me
+# {"created_at":"2026-09-07T17:22:23Z","email":"owner@example.com",
+#  "id":"f029f9b3-...","role":"owner"}
+
+# OWNR-06: add a teammate — role is one of viewer/developer/admin/owner
+curl -s -b owner_cj.txt -X POST $BASE/admin/owners -H 'Content-Type: application/json' \
+  -d '{"email":"ops@example.com","password":"correcthorse","role":"admin"}'
+# {"created_at":"2026-09-07T17:22:40Z","email":"ops@example.com",
+#  "id":"a477c684-...","role":"admin"}
+
+curl -s -b owner_cj.txt "$BASE/admin/owners"
+# [{"created_at":"...","email":"owner@example.com","id":"f029f9b3-...","role":"owner"},
+#  {"created_at":"...","email":"ops@example.com","id":"a477c684-...","role":"admin"}]
+
+# OWNR-11/14: every owner-plane action, and cross-plane customer signups
+# too, land in one audit trail
+curl -s -b owner_cj.txt "$BASE/admin/audit-log"
+# [{"actor_email":"owner@example.com","actor_id":"f029f9b3-...",
+#   "created_at":"2026-09-07T17:22:40Z","event":"owner_create",
+#   "metadata":{"role":"admin"},"target_email":"ops@example.com",
+#   "target_id":"a477c684-..."},
+#  {"actor_email":"owner@example.com", ..., "event":"login", ...},
+#  {"actor_email":"carol@example.com", ..., "event":"customer_signup", ...},
+#  ...]
+```

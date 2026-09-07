@@ -170,6 +170,55 @@ connection stays open. A deployment narrowing a collection from
 `read: shared` to `read: owner` (or the reverse) takes effect for every
 open subscription immediately, with no need for clients to reconnect.
 
+## Example: public read, owner-only write (ACCESS-03) with curl
+
+Declare the policy in a migration (`_policies` is written to like any
+other table, but only through your own migrations — there's no
+`/api/data/_policies`):
+
+```sql
+-- +migrate Up
+CREATE TABLE posts (
+  id       TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL,
+  title    TEXT NOT NULL,
+  body     TEXT
+);
+INSERT INTO _policies (collection, operation, rule) VALUES ('posts', 'read', 'shared');
+```
+
+`GET /api/schema` (`spec/schema-introspection.md`) confirms what that
+did — `read_rule` moved, the other three didn't:
+
+```json
+{"name": "posts", "read_rule": "shared",
+ "create_rule": "owner", "update_rule": "owner", "delete_rule": "owner", ...}
+```
+
+Then, with two different authenticated users' access tokens
+(`records:read records:write` each — same dance as `spec/auto-rest.md`'s
+walkthrough):
+
+```sh
+# alice creates a post
+POST=$(curl -s -X POST "$BASE/api/data/posts" -H "Authorization: Bearer $ALICE_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"title":"hello world","body":"my first post"}')
+# {"body":"my first post","id":"0568ea7b-...","owner_id":"a6075f2b-...","title":"hello world"}
+POST_ID=0568ea7b-...
+
+# carol — not the owner — can still read it (read: shared)
+curl -s "$BASE/api/data/posts/$POST_ID" -H "Authorization: Bearer $CAROL_TOKEN"
+# {"body":"my first post","id":"0568ea7b-...","owner_id":"a6075f2b-...","title":"hello world"}
+
+# but carol can't write it — create/update/delete stayed at the owner default
+curl -s -o /dev/null -w "status=%{http_code}\n" -X PATCH "$BASE/api/data/posts/$POST_ID" \
+  -H "Authorization: Bearer $CAROL_TOKEN" -H 'Content-Type: application/json' -d '{"title":"hijacked"}'
+# status=404
+curl -s -o /dev/null -w "status=%{http_code}\n" -X DELETE "$BASE/api/data/posts/$POST_ID" \
+  -H "Authorization: Bearer $CAROL_TOKEN"
+# status=404
+```
+
 ## ACCESS-13: A `_policies` row naming a collection that isn't exposed is rejected at startup, distinctly from ACCESS-08
 Given a `_policies` row whose `collection` doesn't match any exposed
 collection — misspelled, a reserved/internal table, or a table

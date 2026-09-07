@@ -247,7 +247,9 @@ curl -s -c cj.txt -X POST $BASE/api/auth/signup \
 stands in for one here:
 
 ```sh
-VERIFIER=$(openssl rand -base64 32 | tr -d '=+/\n' | cut -c1-64)
+VERIFIER=$(openssl rand -base64 48 | tr -d '=+/\n')   # 48 raw bytes so this safely
+                                                        # clears PKCE's 43-char minimum
+                                                        # even after stripping +/
 CHALLENGE=$(printf '%s' "$VERIFIER" | openssl dgst -sha256 -binary | openssl base64 | tr -d '=' | tr '+/' '-_' | tr -d '\n')
 REDIRECT_URI="https://app.example.com/callback"
 SCOPE="profile records:read records:write"

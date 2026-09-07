@@ -103,3 +103,25 @@ revokes every outstanding access/refresh token already issued to that
 client on the caller's behalf, without touching the account, its data,
 or any grant to a *different* client. Before this, the only way to undo
 a scope grant at all was deleting the entire account.
+
+## Example: listing and revoking a standing consent
+
+The authorize+consent dance itself (the `oauth_request` hidden field,
+approving via a `POST` with `granted=<scope>` repeated, the `303` with a
+`code`) is `spec/auto-rest.md`'s curl walkthrough, steps 4–5. Once
+you've done that once or twice with different clients:
+
+```sh
+curl -s -b cj.txt "$BASE/api/auth/me/consents"
+```
+```json
+{"consents": [
+  {"client_id": "0507a4ce-...", "client_name": "", "scopes": ["records:read"]},
+  {"client_id": "f0d55eb5-...", "client_name": "", "scopes": ["records:read", "records:write"]}
+]}
+```
+```sh
+curl -s -o /dev/null -w "status=%{http_code}\n" -b cj.txt \
+  -X DELETE "$BASE/api/auth/me/consents/0507a4ce-..."
+# status=204 — that client's tokens stop working immediately; the other client's don't
+```

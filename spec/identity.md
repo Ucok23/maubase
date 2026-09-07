@@ -169,3 +169,62 @@ silent authentication as the wrong account would be worse than an
 outright rejection, so the fixed precedence is stated here explicitly
 rather than left to whichever order the code happens to check things
 in.
+
+## Example: sign up, use, and erase an account with curl
+
+Every response below is real, from an actual `maubase serve` — this is
+the plain identity plane, cookie-based (`-c`/`-b` for curl's cookie
+jar), no OAuth token needed for any of it:
+
+```sh
+BASE=http://localhost:8080
+
+# IDNT-01: sign up — also signs you in, cj.txt now holds a session
+curl -s -c cj.txt -X POST $BASE/api/auth/signup \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"jane@example.com","password":"correcthorse"}'
+# {"user":{"created_at":"2026-09-07T17:15:48Z","email":"jane@example.com",
+#          "id":"c9ba2147-d02f-4139-a7f2-08f2f4ab6073"}}
+
+# IDNT-06: fetch your own identity
+curl -s -b cj.txt $BASE/api/auth/me
+# {"created_at":"2026-09-07T17:15:48Z","email":"jane@example.com",
+#  "id":"c9ba2147-d02f-4139-a7f2-08f2f4ab6073"}
+
+# IDNT-03/IDNT-02: the two rejections you'll actually hit while integrating
+curl -s -X POST $BASE/api/auth/signup -H 'Content-Type: application/json' \
+  -d '{"email":"weak@example.com","password":"short"}'
+# {"error":"password must be at least 8 characters"}   (400)
+curl -s -X POST $BASE/api/auth/signup -H 'Content-Type: application/json' \
+  -d '{"email":"jane@example.com","password":"whatever123"}'
+# {"error":"email already registered"}   (409)
+
+# IDNT-08: logout revokes the session immediately
+curl -s -b cj.txt -c cj.txt -X POST $BASE/api/auth/logout   # 204
+curl -s -b cj.txt $BASE/api/auth/me
+# {"error":"unauthorized"}   (401 — the same cookie no longer works)
+
+# IDNT-04: log back in
+curl -s -c cj.txt -X POST $BASE/api/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"jane@example.com","password":"correcthorse"}'
+# {"expires_at":"2026-10-08T00:15:50.027810876+07:00"}
+
+# IDNT-09: export — profile, every owned auto-REST row grouped by table,
+# and uploaded files (see spec/storage.md); empty here since none exist
+curl -s -b cj.txt $BASE/api/auth/me/export
+# {"files":[],"profile":{"created_at":"2026-09-07T17:15:48Z",
+#  "email":"jane@example.com","id":"c9ba2147-..."},
+#  "records":{"notes":[{"body":"eggs, milk","id":"74fbebed-...",
+#  "owner_id":"c9ba2147-...","title":"grocery list"}]}}
+
+# IDNT-10: delete the account
+curl -s -o /dev/null -w "status=%{http_code}\n" -b cj.txt -X DELETE $BASE/api/auth/me
+# status=204
+
+# IDNT-10, IDNT-13: afterward, the old credentials and any access token
+# issued to this account (spec/oauth-token.md) both stop working —
+# never a lingering way back in
+curl -s -X POST $BASE/api/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"jane@example.com","password":"correcthorse"}'
+# {"error":"invalid email or password"}   (401)
+```
