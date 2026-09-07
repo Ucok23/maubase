@@ -45,8 +45,9 @@ when an operator runs `maubase init`,
 then it leaves the file exactly as it was — no duplicate entry added.
 
 ## INIT-05: `maubase init` refuses to overwrite an already-initialized project
-Given `migrations/`, `.env.example`, and/or `.claude/skills/maubase/SKILL.md`
-already exist in the target directory,
+Given `migrations/`, `.env.example`, `.claude/skills/maubase/SKILL.md`,
+and/or `.maubase/AGENTS.md` already exist in the target directory (plus
+`maubase-client/` too, when `--js-client` was passed),
 when an operator runs `maubase init` again,
 then it fails with an error naming exactly which of those already
 exist, and creates or modifies nothing at all — including not touching
@@ -57,8 +58,8 @@ blocked it.
 Given a directory path is passed as `maubase init`'s argument,
 when it runs,
 then every file it creates (`migrations/0001_init.sql`, `.env.example`,
-`.claude/skills/maubase/SKILL.md`, `.gitignore`) is created under that
-directory, not the current working directory.
+`.claude/skills/maubase/SKILL.md`, `.maubase/AGENTS.md`, `.gitignore`)
+is created under that directory, not the current working directory.
 
 ## INIT-07: `maubase init` scaffolds a Claude Code skill pointing at what maubase is
 Given an empty (or otherwise maubase-unconfigured) directory,
@@ -83,10 +84,9 @@ The generated content is wrapped in a `<!-- maubase:begin
 vX.Y.Z -->`/`<!-- maubase:end -->` managed block naming the exact
 maubase version (`maubase version`'s own version string) that generated
 it, so staleness after a later upgrade is visible rather than silent —
-and so a future regeneration only replaces that block, leaving anything
-a person appends below `<!-- maubase:end -->` untouched. (The
-regeneration command itself doesn't exist yet — see issue #161 — this
-scenario only covers first-time scaffolding.)
+and so `maubase init --update-agent-docs` (INIT-09) only replaces that
+block later, leaving anything a person appends below
+`<!-- maubase:end -->` untouched.
 
 Each API area also links to its own spec file at a stable
 `raw.githubusercontent.com/Ucok23/maubase/<ref>/spec/*.md` URL — never
@@ -101,3 +101,77 @@ maubase's actual behavior on its own — training data predates this
 version, and any memory it might have of maubase's own source from
 unrelated context isn't this project's build — so the skill explicitly
 tells it to fetch the pinned spec rather than guess or trust either.
+
+## INIT-08: `maubase init` also scaffolds a tool-agnostic `.maubase/AGENTS.md`
+Given an empty (or otherwise maubase-unconfigured) directory,
+when an operator runs `maubase init`,
+then, alongside `.claude/skills/maubase/SKILL.md` (INIT-07), it also
+creates `.maubase/AGENTS.md` — the same content, minus the Claude Code
+skill's YAML frontmatter, for an agent that doesn't discover
+`.claude/skills/*` at all. `.maubase/` rather than a root-level
+`AGENTS.md`: a root `AGENTS.md` is exactly the kind of file the
+project's own app is likely to have (or want) for itself, the same
+ownership-collision reason `SKILL.md` isn't a root `CLAUDE.md` either
+(see INIT-07's own rationale) — `.maubase/` isn't a directory anything
+else plausibly owns.
+
+Both files share one managed block per INIT-07's version-pinning
+mechanism; `--update-agent-docs` (INIT-09) refreshes both together.
+
+## INIT-09: `maubase init --update-agent-docs` refreshes the managed block in place
+Given a project previously scaffolded by `maubase init` (or, for that
+matter, one where the agent-context files don't exist yet at all — see
+below), and a `maubase` binary that may be a different version than
+whatever generated them,
+when an operator runs `maubase init --update-agent-docs [dir]`,
+then for each of `.claude/skills/maubase/SKILL.md` and
+`.maubase/AGENTS.md`:
+
+- if the file doesn't exist yet, it's created fresh — same content
+  `maubase init` itself would write, so a project that predates this
+  flag entirely can still adopt it with no separate migration step;
+- if it exists and has a `<!-- maubase:begin -->`...`<!-- maubase:end
+  -->` block, only that block's content is replaced with a freshly
+  rendered one (new version marker, spec links re-pinned to the ref
+  this binary was built from) — everything before it (the skill's YAML
+  frontmatter) and everything a person appended after
+  `<!-- maubase:end -->` is left untouched;
+- if it exists but has no such block at all (a person deleted or
+  rewrote it by hand), the command refuses and names the file, rather
+  than guessing where regenerated content belongs in a file it no
+  longer recognizes — and does not touch the other of the two files
+  just because one refused.
+
+Unlike a bare `maubase init`, this never fails over files already
+existing, and never touches `migrations/`, `.env.example`, or
+`.gitignore` — those aren't version-pinned content the way the
+agent-context files are. `--js-client` can't be combined with this
+flag (INIT-10 covers why).
+
+## INIT-10: `maubase init --js-client` vendors the built TypeScript client
+Given the `--js-client` flag,
+when an operator runs `maubase init --js-client [dir]` against a
+directory not yet initialized (including `maubase-client/` itself not
+already existing — an existing one is a conflict, refused exactly like
+`migrations/` or `.env.example` per INIT-05),
+then it additionally copies the built `@maubase/client` output
+(`sdk/js/dist/*`, embedded into the `maubase` binary at build time —
+see `sdk/js/embed.go`) into `maubase-client/` at the project root, plus
+a generated `maubase-client/README.md` naming the exact maubase version
+it was vendored from and — carried over from `sdk/js/README.md`'s own
+"What's not here yet" — that it covers only auth and auto-REST, not
+storage or realtime. Nothing here publishes to npm or introduces a
+second version number: whatever `sdk/js/dist` contained when this
+`maubase` binary was built is exactly what gets vendored, tied 1:1 to
+`maubase version`'s own output.
+
+`maubase-client/` is meant to be committed (vendored source, not
+instance data like `data/`) — `maubase init` never adds it to
+`.gitignore`.
+
+When `--js-client` was passed, the `SKILL.md`/`AGENTS.md` content
+generated in the same run (INIT-07/INIT-08) additionally links
+`maubase-client/`, telling an agent to prefer it over raw fetch calls
+for auth and auto-REST while repeating the storage/realtime gap; a
+plain `maubase init` with no `--js-client` omits that section entirely
+rather than pointing at a directory that doesn't exist.

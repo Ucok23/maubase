@@ -291,7 +291,15 @@ ones a deployer would still need to build or configure themselves.
 
 Starting a brand new project? `maubase init [dir]` scaffolds a starter
 `migrations/` directory, an `.env.example` documenting every env var
-below, and a `.gitignore` entry for `data/` (see spec/project-init.md).
+below, a `.gitignore` entry for `data/`, and agent-context docs for
+whoever (or whatever) builds this project out — a Claude Code skill at
+`.claude/skills/maubase/SKILL.md` plus a tool-agnostic
+`.maubase/AGENTS.md` fallback, both version-pinned to spec content at
+the exact commit/tag that generated them. Add `--js-client` to also
+vendor the built TypeScript client into `maubase-client/`. After
+upgrading the `maubase` binary a project runs, `maubase init
+--update-agent-docs` refreshes just those two files in place. See
+spec/project-init.md.
 
 ```sh
 make run

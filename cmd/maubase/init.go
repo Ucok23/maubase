@@ -10,30 +10,67 @@ import (
 // runInit implements `maubase init [dir]` — see spec/project-init.md.
 // It scaffolds a brand new maubase deployment: a starter migrations/
 // directory, a .env.example documenting every MAUBASE_* env var, a
-// Claude Code skill (skillRelPath) so an agent working in this project
-// understands what maubase is without reading its source, and a
-// .gitignore entry for the default data/ directory. Meant to run once,
-// against a fresh (or not-yet-maubase-configured) directory — it
-// refuses rather than overwrites if migrations/, .env.example, or the
-// skill file already exist, since any of those existing means this
-// project has already been initialized.
+// Claude Code skill (skillRelPath) plus a tool-agnostic fallback
+// (agentsRelPath) so an agent working in this project understands what
+// maubase is without reading its source, and a .gitignore entry for the
+// default data/ directory. Meant to run once, against a fresh (or
+// not-yet-maubase-configured) directory — it refuses rather than
+// overwrites if migrations/, .env.example, or either agent-context file
+// already exist, since any of those existing means this project has
+// already been initialized.
+//
+// Two flags change that:
+//
+//   - --update-agent-docs skips scaffolding entirely and instead
+//     refreshes just the skill/AGENTS.md managed blocks — see
+//     runUpdateAgentDocs — the one part of `init` that's meant to be
+//     re-run, after a maubase upgrade.
+//   - --js-client additionally vendors sdk/js/dist into jsClientRelDir —
+//     see writeJSClient. Not combined with --update-agent-docs: which
+//     new deployment gets a client is a one-time choice made at
+//     scaffold time, not something a docs refresh should decide.
 func runInit(args []string) error {
+	var (
+		updateAgentDocs bool
+		jsClient        bool
+		positional      []string
+	)
+	for _, a := range args {
+		switch a {
+		case "--update-agent-docs":
+			updateAgentDocs = true
+		case "--js-client":
+			jsClient = true
+		default:
+			if strings.HasPrefix(a, "-") {
+				return fmt.Errorf("usage: maubase init [--js-client] [dir], or maubase init --update-agent-docs [dir]")
+			}
+			positional = append(positional, a)
+		}
+	}
+
 	dir := "."
-	switch len(args) {
+	switch len(positional) {
 	case 0:
 		// use default
 	case 1:
-		if strings.HasPrefix(args[0], "-") {
-			return fmt.Errorf("usage: maubase init [dir]")
-		}
-		dir = args[0]
+		dir = positional[0]
 	default:
-		return fmt.Errorf("usage: maubase init [dir]")
+		return fmt.Errorf("usage: maubase init [--js-client] [dir], or maubase init --update-agent-docs [dir]")
+	}
+
+	if updateAgentDocs && jsClient {
+		return fmt.Errorf("--js-client can't be combined with --update-agent-docs — run maubase init --js-client on its own to vendor the client into an already-initialized project")
+	}
+	if updateAgentDocs {
+		return runUpdateAgentDocs(dir)
 	}
 
 	migrationsDir := filepath.Join(dir, "migrations")
 	envExamplePath := filepath.Join(dir, ".env.example")
 	skillPath := filepath.Join(dir, skillRelPath)
+	agentsPath := filepath.Join(dir, agentsRelPath)
+	jsClientDir := filepath.Join(dir, jsClientRelDir)
 
 	var conflicts []string
 	if _, err := os.Stat(migrationsDir); err == nil {
@@ -44,6 +81,14 @@ func runInit(args []string) error {
 	}
 	if _, err := os.Stat(skillPath); err == nil {
 		conflicts = append(conflicts, skillPath)
+	}
+	if _, err := os.Stat(agentsPath); err == nil {
+		conflicts = append(conflicts, agentsPath)
+	}
+	if jsClient {
+		if _, err := os.Stat(jsClientDir); err == nil {
+			conflicts = append(conflicts, jsClientDir)
+		}
 	}
 	if len(conflicts) > 0 {
 		return fmt.Errorf("already initialized: %s already exist(s)", strings.Join(conflicts, ", "))
@@ -64,13 +109,37 @@ func runInit(args []string) error {
 	}
 	fmt.Printf("created %s\n", envExamplePath)
 
+	// The client, if requested, is vendored before the skill/AGENTS.md
+	// are rendered below — renderSkill/renderAgentsDoc take jsClient
+	// directly here (we already know it from the flag), but writing the
+	// directory first keeps this ordering the same "vendor, then
+	// document" shape runUpdateAgentDocs uses via hasJSClient(dir).
+	if jsClient {
+		if err := os.MkdirAll(jsClientDir, 0o755); err != nil {
+			return fmt.Errorf("create %s: %w", jsClientDir, err)
+		}
+		n, err := writeJSClient(dir)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("created %s (%d files vendored from sdk/js/dist)\n", jsClientDir, n)
+	}
+
 	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(skillPath), err)
 	}
-	if err := os.WriteFile(skillPath, []byte(renderSkill()), 0o644); err != nil {
+	if err := os.WriteFile(skillPath, []byte(renderSkill(jsClient)), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", skillPath, err)
 	}
 	fmt.Printf("created %s\n", skillPath)
+
+	if err := os.MkdirAll(filepath.Dir(agentsPath), 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Dir(agentsPath), err)
+	}
+	if err := os.WriteFile(agentsPath, []byte(renderAgentsDoc(jsClient)), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", agentsPath, err)
+	}
+	fmt.Printf("created %s\n", agentsPath)
 
 	gitignorePath := filepath.Join(dir, ".gitignore")
 	if err := ensureGitignoreHasDataDir(gitignorePath); err != nil {
