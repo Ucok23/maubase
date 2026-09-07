@@ -11,6 +11,16 @@ import "strings"
 // namespaced skill never competes for that.
 const skillRelPath = ".claude/skills/maubase/SKILL.md"
 
+// agentsRelPath is where maubase init scaffolds the tool-agnostic
+// fallback of the same content, for an agent that isn't Claude Code and
+// so won't discover skillRelPath at all — see spec/project-init.md
+// INIT-08. Nested under .maubase/, not the repo root: a root AGENTS.md
+// is exactly the file this project's own app is likely to have (or want)
+// for itself, the same ownership-collision reason skillRelPath isn't a
+// root CLAUDE.md either. .maubase/ isn't a directory anything else
+// plausibly owns.
+const agentsRelPath = ".maubase/AGENTS.md"
+
 // maubaseRepo is where this project's own spec/*.md lives — the
 // authoritative, version-matched reference the skill points an agent
 // to per topic. Deliberately a pointer, not inlined content: this
@@ -23,15 +33,39 @@ const skillRelPath = ".claude/skills/maubase/SKILL.md"
 // exist to avoid everywhere else.
 const maubaseRepo = "Ucok23/maubase"
 
-// renderSkill fills skillTemplate with the maubase version generating
-// it, and with raw.githubusercontent.com links pinned to the exact
-// commit or release tag that binary was built from (currentDocRef) —
-// so every spec link resolves to the content this binary actually
-// implements, not whatever "main" says by the time it's fetched.
-func renderSkill() string {
-	ref := currentDocRef()
-	out := strings.ReplaceAll(skillTemplate, "{{VERSION}}", currentModuleVersion())
-	out = strings.ReplaceAll(out, "{{DOCREF}}", ref)
+// renderSkill fills skillTemplate (frontmatter + agentDocBody) with the
+// maubase version generating it, raw.githubusercontent.com links pinned
+// to the exact commit or release tag that binary was built from
+// (currentDocRef), and — only when jsClient is true — the vendored-
+// client section (see spec/project-init.md INIT-10). jsClient should
+// reflect whether jsClientRelDir actually exists in the target
+// directory, not just whether --js-client was passed on this
+// particular invocation: runUpdateAgentDocs has no such flag of its own
+// and relies on hasJSClient(dir) instead, so the two code paths agree
+// on what "this project has a vendored client" means.
+func renderSkill(jsClient bool) string {
+	return renderAgentDoc(skillTemplate, jsClient)
+}
+
+// renderAgentsDoc is renderSkill for agentsTemplate — the same
+// agentDocBody, minus the Claude-Code-specific frontmatter. See
+// agentsRelPath.
+func renderAgentsDoc(jsClient bool) string {
+	return renderAgentDoc(agentsTemplate, jsClient)
+}
+
+// renderAgentDoc is the shared substitution pass behind renderSkill and
+// renderAgentsDoc: both templates carry the same three placeholders,
+// just wrapped differently (skillTemplate adds YAML frontmatter around
+// agentDocBody; agentsTemplate is agentDocBody verbatim).
+func renderAgentDoc(tmpl string, jsClient bool) string {
+	section := ""
+	if jsClient {
+		section = jsClientSection
+	}
+	out := strings.Replace(tmpl, "{{JSCLIENT}}", section, 1)
+	out = strings.ReplaceAll(out, "{{VERSION}}", currentModuleVersion())
+	out = strings.ReplaceAll(out, "{{DOCREF}}", currentDocRef())
 	return out
 }
 
@@ -43,14 +77,36 @@ func specURL(ref, file string) string {
 	return "https://raw.githubusercontent.com/" + maubaseRepo + "/" + ref + "/spec/" + file
 }
 
-// skillTemplate is wrapped in a <!-- maubase:begin/end --> managed
-// block so a future "refresh this after upgrading" command (see #161)
-// can replace just this content without touching anything a person
-// appends below the closing marker.
+// skillTemplate is the Claude Code skill: YAML frontmatter (so Claude
+// Code's skill discovery can find and describe it) wrapped around the
+// same agentDocBody every other agent-context file shares.
+//
+// A var, not a const: agentDocBody is itself a var (see its own doc
+// comment for why), and Go's constant-expression rules don't allow a
+// non-constant operand in a const string concatenation.
+var skillTemplate = `---
+name: maubase
+description: Use when working on a project backed by maubase (a self-hosted auth/database/storage/realtime backend) — adding endpoints, changing schema, or touching auth/migrations/access rules in this project.
+---
+
+` + agentDocBody
+
+// agentsTemplate is the tool-agnostic fallback (agentsRelPath) for an
+// agent that isn't Claude Code and so never discovers skillTemplate at
+// all — agentDocBody verbatim, with no frontmatter: nothing here reads
+// YAML frontmatter the way Claude Code's skill discovery does, and the
+// body's own opening "# maubase" heading already says what the file is.
+var agentsTemplate = agentDocBody
+
+// agentDocBody is wrapped in a <!-- maubase:begin/end --> managed block
+// so `maubase init --update-agent-docs` (see runUpdateAgentDocs) can
+// replace just this content later — after an upgrade, say — without
+// touching the frontmatter above it (skillTemplate only) or anything a
+// person appends below the closing marker in either file.
 //
 // A var, not a const: it's built with specURL() calls baked in at
 // program-init time (each one already carrying the literal "{{DOCREF}}"
-// placeholder as its ref argument, replaced for real by renderSkill()),
+// placeholder as its ref argument, replaced for real by renderAgentDoc),
 // which Go's constant-expression rules don't allow in a const.
 //
 // Deliberately short. This is a pointer file, not a manual: every link
@@ -58,12 +114,7 @@ func specURL(ref, file string) string {
 // current, possibly-just-changed state) or a spec file pinned to the
 // exact commit that generated this — never prose restating either one,
 // which would just be a second copy to keep in sync by hand.
-var skillTemplate = `---
-name: maubase
-description: Use when working on a project backed by maubase (a self-hosted auth/database/storage/realtime backend) — adding endpoints, changing schema, or touching auth/migrations/access rules in this project.
----
-
-<!-- maubase:begin {{VERSION}} -->
+var agentDocBody = `<!-- maubase:begin {{VERSION}} -->
 # maubase
 
 This project's backend is maubase — self-hosted auth, a database with
@@ -94,7 +145,7 @@ instead:
   admin UI/SQL Studio can change the live schema without a matching
   migration file — ` + "`maubase migrate diff`" + ` catches that drift; run it
   before trusting migrations/ as a complete picture.
-
+{{JSCLIENT}}
 ## What this backend's fixed API surface is — spec, not summary
 
 - Auth (signup/login/session): ` + specURL("{{DOCREF}}", "identity.md") + `
@@ -108,7 +159,9 @@ instead:
 
 ## Commands
 
-` + "`maubase serve`" + `, ` + "`maubase migrate new/up/down/redo/to/status/diff`" + `, ` + "`maubase version`" + `
+` + "`maubase serve`" + `, ` + "`maubase migrate new/up/down/redo/to/status/diff`" + `, ` + "`maubase version`" + `,
+` + "`maubase init --update-agent-docs`" + ` (refreshes this file after a
+` + "`maubase`" + ` upgrade — see below)
 
 ## The one rule with no exception
 
@@ -117,5 +170,31 @@ without also writing a migration for it. Run ` + "`maubase migrate diff`" + `
 before considering schema work done. Full migration workflow (new/up/
 down/redo/to/status/diff, the Up/Down marker format, checksums):
 ` + specURL("{{DOCREF}}", "migrations-cli.md") + `
+
+## Keeping this file current
+
+This file is pinned to **{{VERSION}}** — every link above resolves to
+that exact commit/tag's spec, not whatever a newer maubase might say.
+After upgrading the ` + "`maubase`" + ` binary this project runs, re-run
+` + "`maubase init --update-agent-docs`" + ` to refresh the version marker and
+every link above to match; it only replaces the content between this
+comment and the matching ` + "`<!-- maubase:end -->`" + ` below, so anything
+you've added elsewhere in this file (including below that line) is left
+alone.
 <!-- maubase:end -->
+`
+
+// jsClientSection is spliced into agentDocBody's {{JSCLIENT}} placeholder
+// only when this project has a vendored client (see hasJSClient) — most
+// projects don't opt into --js-client, and a section pointing at a
+// directory that doesn't exist would be actively misleading rather than
+// just unused.
+var jsClientSection = `
+## Client library
+
+This project has maubase's TypeScript client vendored at
+` + "`maubase-client/`" + ` (` + "`maubase init --js-client`" + `, generated for
+{{VERSION}}) — prefer it over raw fetch calls for auth (` + "`client.auth`" + `)
+and auto-REST (` + "`client.data`" + `). It does not cover storage or realtime;
+see ` + "`maubase-client/README.md`" + `, or the spec links below, for those.
 `

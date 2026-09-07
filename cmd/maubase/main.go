@@ -233,17 +233,20 @@ func printUsage() {
 	fmt.Fprint(os.Stderr, `maubase: a self-hostable backend
 
 Usage:
-  maubase serve                Start the server
-  maubase init [dir]           Scaffold a brand new deployment (migrations/, .env.example, .gitignore)
-  maubase migrate new <name>   Scaffold the next-numbered application migration file
-  maubase migrate up           Apply pending application migrations
-  maubase migrate down [n]     Revert the last n applied migrations (default 1)
-  maubase migrate redo [n]     Revert then reapply the last n applied migrations (default 1)
-  maubase migrate to <ver>     Move to exactly <ver> (a filename or numeric prefix), forward or back
-  maubase migrate status       List application migrations and whether each is applied
-  maubase migrate diff         Report tables the database has that no applied migration explains (or vice versa)
-  maubase help                 Show this message
-  maubase version              Show the maubase version
+  maubase serve                     Start the server
+  maubase init [dir]                Scaffold a brand new deployment (migrations/, .env.example, agent-context docs, .gitignore)
+  maubase init --js-client [dir]    Also vendor the TypeScript client (sdk/js/dist) into maubase-client/
+  maubase init --update-agent-docs [dir]
+                                     Refresh the scaffolded skill/AGENTS.md in place after a maubase upgrade
+  maubase migrate new <name>        Scaffold the next-numbered application migration file
+  maubase migrate up                Apply pending application migrations
+  maubase migrate down [n]          Revert the last n applied migrations (default 1)
+  maubase migrate redo [n]          Revert then reapply the last n applied migrations (default 1)
+  maubase migrate to <ver>          Move to exactly <ver> (a filename or numeric prefix), forward or back
+  maubase migrate status            List application migrations and whether each is applied
+  maubase migrate diff              Report tables the database has that no applied migration explains (or vice versa)
+  maubase help                      Show this message
+  maubase version                   Show the maubase version
 
 Every path below (and MAUBASE_DB_PATH/MAUBASE_MIGRATIONS_DIR generally)
 resolves relative to the current directory — run "maubase serve" from
