@@ -332,3 +332,32 @@ Given any of the drift conditions above,
 when `maubase migrate diff` runs,
 then the live database is left completely unchanged — it only ever
 reads, and doesn't generate or apply a migration for what it finds.
+
+## Example: status and catching drift
+
+Real transcripts, against a project with two applied migrations:
+
+```console
+$ maubase migrate status
+applied  0001_init.sql  (applied 2026-09-07T17:15:25Z)
+applied  0002_posts.sql  (applied 2026-09-07T17:21:05Z)
+
+$ maubase migrate diff
+no drift: every live table is accounted for by an applied migration
+```
+
+Then a table created directly against the database (SQL Studio, or the
+admin UI's create-table form, do exactly this — see `spec/admin-ui.md`):
+
+```console
+$ sqlite3 data/maubase.db "CREATE TABLE drifted (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL)"
+
+$ maubase migrate diff
+unexplained  drifted  (exists in the database, not accounted for by any applied migration)
+drift found in 1 table(s), see above
+$ echo $?
+1
+```
+
+`diff` only reports (MIGCLI-41) — writing `migrations/0003_drifted.sql`
+to explain it, or dropping the table, is still up to you.

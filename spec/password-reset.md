@@ -133,3 +133,35 @@ reset link resurfacing later (a mail archive, an inbox that was
 compromised and has since been re-secured) must not still be able to
 reset the password once the account's owner believes a reset has
 already fully re-secured it.
+
+## Example: forgot/reset with curl
+
+`forgot-password` always answers `204` (PWRESET-02) regardless of
+whether the email exists or a sender is even configured — so this part
+is real against any deployment, configured or not:
+
+```sh
+curl -s -o /dev/null -w "status=%{http_code}\n" -X POST $BASE/api/auth/forgot-password \
+  -H 'Content-Type: application/json' -d '{"email":"alice@example.com"}'
+# status=204
+```
+
+The actual reset token only ever reaches you via the email itself
+(`MAUBASE_RESEND_API_KEY`/`MAUBASE_EMAIL_FROM` — see README.md) — there
+is no way to fetch it back out over the API, by design, so a genuine
+curl-only round trip isn't something this example can show. What *is*
+demonstrable without a real inbox is `reset-password`'s validation,
+which rejects long before it'd ever get to checking a token against a
+real deployment's data:
+
+```sh
+# PWRESET-07: an unknown/garbage token
+curl -s -X POST $BASE/api/auth/reset-password -H 'Content-Type: application/json' \
+  -d '{"token":"not-a-real-token","password":"newpassword123"}'
+# {"error":"invalid or expired reset token"}   (400)
+
+# PWRESET-04: a weak new password, checked independently of the token
+curl -s -X POST $BASE/api/auth/reset-password -H 'Content-Type: application/json' \
+  -d '{"token":"not-a-real-token","password":"short"}'
+# {"error":"password must be at least 8 characters"}   (400)
+```

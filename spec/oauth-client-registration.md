@@ -64,3 +64,20 @@ then the response is `400` with `error: "invalid_redirect_uri"`, and no
 client is created — catching this at registration time, rather than
 storing it verbatim and having it surface as a confusing failure later
 at `/oauth/authorize`.
+
+## Example
+
+A full registration call (and the shape of a successful response) is
+step 1 of `spec/auto-rest.md`'s curl walkthrough. The one gotcha worth
+showing on its own (REG-08):
+
+```sh
+curl -s -X POST $BASE/oauth/register -H 'Content-Type: application/json' -d '{
+  "redirect_uris": ["not-a-uri"],
+  "token_endpoint_auth_method": "none",
+  "grant_types": ["authorization_code"]
+}'
+# {"error":"invalid_redirect_uri",
+#  "error_description":"redirect_uri \"not-a-uri\" is not a well-formed absolute URI"}
+# (400)
+```

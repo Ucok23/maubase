@@ -66,3 +66,36 @@ pair, and the other is rejected — never both. A retry-after-slow-response
 from a real OAuth client is a normal occurrence, not an attack, but it
 must not be able to mint two independent, simultaneously-live token pairs
 from what "rotated on use" (TOK-05) promises is a single-use token.
+
+## Example: getting and rotating a refresh token with curl
+
+The initial `authorization_code` exchange (TOK-01) is identical to
+`spec/auto-rest.md`'s walkthrough — the only difference here is
+requesting (and the user granting) the `offline_access` scope, which is
+what actually gets you a `refresh_token` back (TOK-04):
+
+```sh
+BASE=http://localhost:8080
+# ... register client (grant_types must include "refresh_token"),
+#     sign up, authorize+consent with scope "records:read offline_access" ...
+
+curl -s -X POST "$BASE/oauth/token" --data-urlencode "grant_type=authorization_code" \
+  --data-urlencode "code=$CODE" --data-urlencode "redirect_uri=$REDIRECT_URI" \
+  --data-urlencode "client_id=$CLIENT_ID" --data-urlencode "code_verifier=$VERIFIER"
+# {"access_token":"eyJ...","expires_in":3599,
+#  "refresh_token":"ory_rt_04m0_QanmzcI36GiFm8EtReTNP9dQiVOoRag_HR_PRs...",
+#  "scope":"records:read offline_access","token_type":"bearer"}
+REFRESH=ory_rt_04m0_QanmzcI36GiFm8EtReTNP9dQiVOoRag_HR_PRs...
+
+# TOK-05: use it — get a brand new pair back
+curl -s -X POST "$BASE/oauth/token" --data-urlencode "grant_type=refresh_token" \
+  --data-urlencode "refresh_token=$REFRESH" --data-urlencode "client_id=$CLIENT_ID"
+# {"access_token":"eyJ...(different)","refresh_token":"ory_rt_fP1B50...(different)", ...}
+
+# TOK-05/TOK-07: the old refresh token is now dead, not just unused
+curl -s -X POST "$BASE/oauth/token" --data-urlencode "grant_type=refresh_token" \
+  --data-urlencode "refresh_token=$REFRESH" --data-urlencode "client_id=$CLIENT_ID" \
+  -w "\nstatus=%{http_code}\n"
+# {"error":"invalid_grant","error_description":"...The refresh token was already used."}
+# status=400
+```

@@ -11,6 +11,15 @@ pipeline" approach the OAuth login/consent screens already take (see
 `internal/oauth/templates.go`). See `internal/adminui` for the
 implementation, `test/adminui_test.go` for the tests.
 
+No curl walkthrough here, deliberately: this surface *is* server-rendered
+HTML meant for a browser, so a screenshot beats a response body. See
+[`e2e/`](../e2e/) instead — a Playwright suite that drives these exact
+pages in a real browser and builds a storyboard report (screenshots per
+step, plus a video) via `make e2e`. The JSON API this UI sits on top of
+(`/admin/auth`, `/admin/owners`, `/admin/audit-log`,
+`/admin/maintenance/*`) is curl-friendly and has its own walkthrough in
+`spec/owner-plane.md` and `spec/maintenance.md`.
+
 ## Shell
 
 ## ADMINUI-01: An anonymous visitor is redirected to the login page

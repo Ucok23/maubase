@@ -108,6 +108,51 @@ independent of whatever the client named the file), so none of this is
 a path-traversal risk either way — it's purely about the header being
 correct for the browser's Save dialog to use.
 
+## Example: upload, fetch, and delete a file with curl
+
+Assumes you already have an access token with `files:read files:write`
+— see `spec/auto-rest.md`'s walkthrough for the full OAuth
+authorize+consent dance (identical here, just a different scope). Every
+response below is real:
+
+```sh
+BASE=http://localhost:8080
+
+# STOR-01: upload — multipart, the "file" field carries the bytes
+curl -s -X POST "$BASE/api/storage/files" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -F "file=@hello.txt;type=text/plain"
+# {"content_type":"text/plain","created_at":"2026-09-07T17:19:20Z",
+#  "filename":"hello.txt","id":"9f91603c-95d4-4663-a4f8-cb909c5325eb","size_bytes":19}
+FILE_ID=9f91603c-95d4-4663-a4f8-cb909c5325eb   # from the response above
+
+# STOR-02: list your own files (paginated like /api/data/{table})
+curl -s "$BASE/api/storage/files" -H "Authorization: Bearer $ACCESS_TOKEN"
+# {"limit":50,"offset":0,"records":[{"content_type":"text/plain",
+#  "created_at":"2026-09-07T17:19:20Z","filename":"hello.txt",
+#  "id":"9f91603c-...","size_bytes":19}]}
+
+# STOR-03: metadata vs. content — two different routes
+curl -s "$BASE/api/storage/files/$FILE_ID" -H "Authorization: Bearer $ACCESS_TOKEN"
+# {"content_type":"text/plain", ... same shape as above}
+
+curl -s -D - "$BASE/api/storage/files/$FILE_ID/content" -H "Authorization: Bearer $ACCESS_TOKEN"
+# HTTP/1.1 200 OK
+# Content-Disposition: attachment; filename=hello.txt
+# Content-Type: text/plain
+# Content-Length: 19
+#
+# hello from maubase
+
+# STOR-04: delete, then confirm it's gone from both routes
+curl -s -o /dev/null -w "status=%{http_code}\n" -X DELETE "$BASE/api/storage/files/$FILE_ID" \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+# status=204
+curl -s -o /dev/null -w "status=%{http_code}\n" "$BASE/api/storage/files/$FILE_ID" \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+# status=404
+```
+
 ## STOR-13: A partial failure mid-erasure leaves consistent, retryable state
 Given a user with 3 uploaded files, where deleting the 2nd file's bytes
 fails (a permissions error, or bytes already gone in a way that isn't

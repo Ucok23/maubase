@@ -16,3 +16,40 @@ When a resource server `GET`s `/.well-known/jwks.json`,
 then it receives the public signing key(s) currently in use, each keyed
 by `kid`, sufficient to verify an access token's signature locally —
 without needing network access back to this server on every request.
+
+## Example: discovering everything with two GETs
+
+```sh
+curl -s http://localhost:8080/.well-known/oauth-authorization-server
+```
+```json
+{
+  "issuer": "http://localhost:8080",
+  "authorization_endpoint": "http://localhost:8080/oauth/authorize",
+  "token_endpoint": "http://localhost:8080/oauth/token",
+  "registration_endpoint": "http://localhost:8080/oauth/register",
+  "revocation_endpoint": "http://localhost:8080/oauth/revoke",
+  "jwks_uri": "http://localhost:8080/.well-known/jwks.json",
+  "scopes_supported": ["profile", "records:read", "records:write",
+                        "files:read", "files:write", "offline_access"],
+  "response_types_supported": ["code"],
+  "grant_types_supported": ["authorization_code", "refresh_token"],
+  "token_endpoint_auth_methods_supported": ["none", "client_secret_basic", "client_secret_post"],
+  "code_challenge_methods_supported": ["S256"]
+}
+```
+
+```sh
+curl -s http://localhost:8080/.well-known/jwks.json
+```
+```json
+{
+  "keys": [
+    {
+      "use": "sig", "kty": "RSA", "alg": "RS256",
+      "kid": "95042402-0240-4b1e-b805-6a0d046ae12c",
+      "n": "p5XJlPDVgSkdLpc4ColzV_QXWPhkxSBAUFVfjy8-...", "e": "AQAB"
+    }
+  ]
+}
+```
